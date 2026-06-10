@@ -1,3 +1,4 @@
+import pytest
 from backend.app.core.config import settings
 from backend.app.core import database
 from sqlalchemy.pool import NullPool
@@ -17,3 +18,14 @@ database.async_session = async_sessionmaker(
     class_=AsyncSession,
     expire_on_commit=False,
 )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def setup_test_s3_bucket():
+    """Ensure S3 bucket exists in LocalStack before running test suite."""
+    from backend.app.core.aws import ensure_bucket_exists
+    try:
+        ensure_bucket_exists()
+    except Exception:
+        pass
+
