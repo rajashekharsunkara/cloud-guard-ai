@@ -4,7 +4,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from langchain_core.messages import AIMessage
 
 from backend.app.services.agents import (
-    calculate_security_score,
     run_security_audit,
     run_patch_generation,
     run_diagram_analysis,
@@ -97,7 +96,9 @@ class TestAgentsUnit:
         mock_embedding.return_value = [0.2] * 768
 
         mock_db = MagicMock()
-        mock_db.search_similar = AsyncMock(return_value=[{"description": "Past port patch", "patched_code": "close port"}])
+        mock_db.search_similar = AsyncMock(
+            return_value=[{"description": "Past port patch", "patched_code": "close port"}]
+        )
         mock_db.save_vulnerability = AsyncMock()
 
         result = await run_full_audit(

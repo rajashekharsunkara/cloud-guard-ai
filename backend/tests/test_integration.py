@@ -1,4 +1,3 @@
-import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from fastapi.testclient import TestClient
 
@@ -85,6 +84,7 @@ class TestAPIIntegration:
         mock_storage_class.return_value = mock_storage
 
         mock_db = AsyncMock()
+
         async def override_get_db():
             yield mock_db
         app.dependency_overrides[get_db] = override_get_db
@@ -127,6 +127,7 @@ class TestAPIIntegration:
         mock_db_class.return_value = mock_db
 
         mock_scoped_db = AsyncMock()
+
         async def override_get_db():
             yield mock_scoped_db
         app.dependency_overrides[get_db] = override_get_db
@@ -162,6 +163,7 @@ class TestAPIIntegration:
         mock_db_class.return_value = mock_db
 
         mock_scoped_db = AsyncMock()
+
         async def override_get_db():
             yield mock_scoped_db
         app.dependency_overrides[get_db] = override_get_db

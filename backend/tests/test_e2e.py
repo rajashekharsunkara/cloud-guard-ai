@@ -1,6 +1,5 @@
 import pytest
-import json
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 import httpx
 from httpx import AsyncClient
 
@@ -48,7 +47,10 @@ class TestEndToEndWorkflow:
             # Run audit
             audit_payload = {
                 "file_name": "e2e_test.tf",
-                "iac_content": 'resource "aws_security_group" "web_sg" { ingress { from_port = 22 cidr_blocks = ["0.0.0.0/0"] } }',
+                "iac_content": (
+                    'resource "aws_security_group" "web_sg" { '
+                    'ingress { from_port = 22 cidr_blocks = ["0.0.0.0/0"] } }'
+                ),
             }
 
             audit_resp = await client.post("/api/audit", json=audit_payload)

@@ -3,14 +3,15 @@ import logging
 import uuid
 import base64
 from pathlib import Path
-from typing import AsyncGenerator, Optional
+from typing import Optional
 
-logger = logging.getLogger("cloudguard.agents")
 from langchain_groq import ChatGroq
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.app.core.config import settings
+
+logger = logging.getLogger("cloudguard.agents")
 
 PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 

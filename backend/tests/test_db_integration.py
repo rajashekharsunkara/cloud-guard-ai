@@ -1,11 +1,10 @@
 import pytest
 import pytest_asyncio
-import asyncio
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy import text, delete
 
 from backend.app.core.config import settings
-from backend.app.core.database import init_db, Base
+from backend.app.core.database import init_db
 from backend.app.services.db_service import DBService, Vulnerability
 
 

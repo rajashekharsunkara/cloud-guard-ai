@@ -3,13 +3,13 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-logger = logging.getLogger("cloudguard.db")
-
-from sqlalchemy import Column, String, Integer, Text, DateTime, select
+from sqlalchemy import Column, String, Text, DateTime, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from pgvector.sqlalchemy import Vector
 
 from backend.app.core.database import Base
+
+logger = logging.getLogger("cloudguard.db")
 
 
 class Vulnerability(Base):

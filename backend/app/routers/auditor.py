@@ -2,8 +2,6 @@ import json
 import logging
 from datetime import datetime, timezone
 
-logger = logging.getLogger("cloudguard.auditor")
-
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,9 +21,9 @@ from backend.app.services.agents import (
     run_full_audit,
     generate_embedding,
     run_security_audit,
-    run_diagram_analysis,
 )
 
+logger = logging.getLogger("cloudguard.auditor")
 router = APIRouter(prefix="/api", tags=["auditor"])
 
 
@@ -38,14 +36,14 @@ async def health_check(db: AsyncSession = Depends(get_db)):
     try:
         from sqlalchemy import text
         await db.execute(text("SELECT 1"))
-    except Exception as e:
+    except Exception:
         logger.exception("Health check database failure")
         db_status = "disconnected"
 
     try:
         storage = StorageService()
         storage.client.head_bucket(Bucket=storage.bucket)
-    except Exception as e:
+    except Exception:
         logger.exception("Health check S3 failure")
         s3_status = "disconnected"
 
@@ -82,7 +80,7 @@ async def audit_iac(
                 original_key=original_key,
                 patched_content=result["patched_code"],
             )
-    except Exception as e:
+    except Exception:
         logger.exception("S3 upload failed in API route")
 
     return AuditResult(
@@ -135,36 +133,53 @@ async def audit_stream(
     async def event_generator():
         db_service = DBService(db)
 
-        yield f"data: {json.dumps({'step': 'security_scan', 'status': 'running', 'message': 'Scanning configuration...'})}\n\n"
+        def send_event(step, status, message=None, data=None):
+            payload = {"step": step, "status": status}
+            if message is not None:
+                payload["message"] = message
+            if data is not None:
+                payload["data"] = data
+            return f"data: {json.dumps(payload)}\n\n"
+
+        yield send_event("security_scan", "running", "Scanning configuration...")
         vulnerabilities = await run_security_audit(request.iac_content)
-        yield f"data: {json.dumps({'step': 'security_scan', 'status': 'complete', 'message': f'Found {len(vulnerabilities)} vulnerabilities', 'data': vulnerabilities})}\n\n"
+        yield send_event(
+            "security_scan",
+            "complete",
+            f"Found {len(vulnerabilities)} vulnerabilities",
+            vulnerabilities,
+        )
 
         similar_patches = []
         if vulnerabilities:
-            yield f"data: {json.dumps({'step': 'rag_retrieval', 'status': 'running', 'message': 'Searching historical patches...'})}\n\n"
+            yield send_event("rag_retrieval", "running", "Searching historical patches...")
             combined_desc = " | ".join(v.get("description", "") for v in vulnerabilities)
             try:
                 query_embedding = await generate_embedding(combined_desc)
                 similar_patches = await db_service.search_similar(query_embedding, limit=3)
             except Exception:
                 similar_patches = []
-            yield f"data: {json.dumps({'step': 'rag_retrieval', 'status': 'complete', 'message': f'Retrieved {len(similar_patches)} similar past patches'})}\n\n"
+            yield send_event(
+                "rag_retrieval",
+                "complete",
+                f"Retrieved {len(similar_patches)} similar past patches",
+            )
 
         if vulnerabilities:
-            yield f"data: {json.dumps({'step': 'patch_generation', 'status': 'running', 'message': 'Generating secure code...'})}\n\n"
+            yield send_event("patch_generation", "running", "Generating secure code...")
             from backend.app.services.agents import run_patch_generation
             patched_code = await run_patch_generation(
                 request.iac_content, vulnerabilities, similar_patches
             )
-            yield f"data: {json.dumps({'step': 'patch_generation', 'status': 'complete', 'message': 'Patched code generated', 'data': patched_code})}\n\n"
+            yield send_event("patch_generation", "complete", "Patched code generated", patched_code)
         else:
             patched_code = ""
 
         from backend.app.services.agents import calculate_security_score
         score = await calculate_security_score(vulnerabilities)
-        yield f"data: {json.dumps({'step': 'scoring', 'status': 'complete', 'message': f'Security Score: {score}/100', 'data': {'score': score}})}\n\n"
+        yield send_event("scoring", "complete", f"Security Score: {score}/100", {"score": score})
 
-        yield f"data: {json.dumps({'step': 'storage', 'status': 'running', 'message': 'Storing results...'})}\n\n"
+        yield send_event("storage", "running", "Storing results...")
         import uuid as _uuid
         audit_id = _uuid.uuid4().hex[:12]
         for vuln in vulnerabilities:
@@ -184,9 +199,18 @@ async def audit_stream(
                 )
             except Exception:
                 pass
-        yield f"data: {json.dumps({'step': 'storage', 'status': 'complete', 'message': 'Results persisted'})}\n\n"
+        yield send_event("storage", "complete", "Results persisted")
 
-        yield f"data: {json.dumps({'step': 'done', 'status': 'complete', 'data': {'audit_id': audit_id, 'security_score': score, 'vulnerabilities': vulnerabilities, 'patched_code': patched_code}})}\n\n"
+        yield send_event(
+            "done",
+            "complete",
+            data={
+                "audit_id": audit_id,
+                "security_score": score,
+                "vulnerabilities": vulnerabilities,
+                "patched_code": patched_code,
+            },
+        )
 
     return StreamingResponse(
         event_generator(),
