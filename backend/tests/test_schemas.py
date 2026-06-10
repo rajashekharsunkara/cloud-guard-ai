@@ -7,6 +7,7 @@ class TestSchemaValidation:
 
     def test_audit_request_valid(self):
         from backend.app.schemas.auditor import AuditRequest
+
         req = AuditRequest(
             iac_content='resource "aws_s3_bucket" "test" { bucket = "my-bucket" }',
             file_name="main.tf",
@@ -16,6 +17,7 @@ class TestSchemaValidation:
 
     def test_audit_request_default_filename(self):
         from backend.app.schemas.auditor import AuditRequest
+
         req = AuditRequest(
             iac_content='resource "aws_s3_bucket" "test" { bucket = "x" }',
         )
@@ -24,46 +26,54 @@ class TestSchemaValidation:
     def test_audit_request_too_short(self):
         from pydantic import ValidationError
         from backend.app.schemas.auditor import AuditRequest
+
         with pytest.raises(ValidationError):
             AuditRequest(iac_content="short")
 
     def test_audit_request_empty(self):
         from pydantic import ValidationError
         from backend.app.schemas.auditor import AuditRequest
+
         with pytest.raises(ValidationError):
             AuditRequest(iac_content="")
 
     def test_search_request_valid(self):
         from backend.app.schemas.auditor import SearchRequest
+
         req = SearchRequest(query="exposed S3 bucket", limit=5)
         assert req.query == "exposed S3 bucket"
         assert req.limit == 5
 
     def test_search_request_default_limit(self):
         from backend.app.schemas.auditor import SearchRequest
+
         req = SearchRequest(query="test query here")
         assert req.limit == 5
 
     def test_search_request_limit_too_low(self):
         from pydantic import ValidationError
         from backend.app.schemas.auditor import SearchRequest
+
         with pytest.raises(ValidationError):
             SearchRequest(query="test", limit=0)
 
     def test_search_request_limit_too_high(self):
         from pydantic import ValidationError
         from backend.app.schemas.auditor import SearchRequest
+
         with pytest.raises(ValidationError):
             SearchRequest(query="test", limit=25)
 
     def test_search_request_query_too_short(self):
         from pydantic import ValidationError
         from backend.app.schemas.auditor import SearchRequest
+
         with pytest.raises(ValidationError):
             SearchRequest(query="ab")
 
     def test_vulnerability_item(self):
         from backend.app.schemas.auditor import VulnerabilityItem
+
         vuln = VulnerabilityItem(
             severity="HIGH",
             title="Public S3 Bucket",
@@ -76,6 +86,7 @@ class TestSchemaValidation:
 
     def test_vulnerability_item_defaults(self):
         from backend.app.schemas.auditor import VulnerabilityItem
+
         vuln = VulnerabilityItem(
             severity="LOW",
             title="Minor Issue",
@@ -87,6 +98,7 @@ class TestSchemaValidation:
     def test_audit_result_score_bounds(self):
         from pydantic import ValidationError
         from backend.app.schemas.auditor import AuditResult
+
         with pytest.raises(ValidationError):
             AuditResult(
                 audit_id="test123",
@@ -102,6 +114,7 @@ class TestSchemaValidation:
 
     def test_audit_result_valid(self):
         from backend.app.schemas.auditor import AuditResult
+
         result = AuditResult(
             audit_id="abc123",
             file_name="main.tf",
@@ -114,6 +127,7 @@ class TestSchemaValidation:
 
     def test_health_response_defaults(self):
         from backend.app.schemas.auditor import HealthResponse
+
         health = HealthResponse()
         assert health.status == "healthy"
         assert health.database == "connected"
@@ -121,12 +135,14 @@ class TestSchemaValidation:
 
     def test_search_response_empty(self):
         from backend.app.schemas.auditor import SearchResponse
+
         resp = SearchResponse(query="test", results=[], total=0)
         assert resp.total == 0
         assert resp.results == []
 
     def test_search_result_item(self):
         from backend.app.schemas.auditor import SearchResultItem
+
         item = SearchResultItem(
             audit_id="x123",
             file_name="main.tf",
@@ -143,12 +159,14 @@ class TestSecurityScoring:
     @pytest.mark.asyncio
     async def test_perfect_score(self):
         from backend.app.services.agents import calculate_security_score
+
         score = await calculate_security_score([])
         assert score == 100
 
     @pytest.mark.asyncio
     async def test_critical_penalty(self):
         from backend.app.services.agents import calculate_security_score
+
         vulns = [{"severity": "CRITICAL", "title": "Test"}]
         score = await calculate_security_score(vulns)
         assert score == 75
@@ -156,6 +174,7 @@ class TestSecurityScoring:
     @pytest.mark.asyncio
     async def test_high_penalty(self):
         from backend.app.services.agents import calculate_security_score
+
         vulns = [{"severity": "HIGH", "title": "Test"}]
         score = await calculate_security_score(vulns)
         assert score == 85
@@ -163,6 +182,7 @@ class TestSecurityScoring:
     @pytest.mark.asyncio
     async def test_medium_penalty(self):
         from backend.app.services.agents import calculate_security_score
+
         vulns = [{"severity": "MEDIUM", "title": "Test"}]
         score = await calculate_security_score(vulns)
         assert score == 92
@@ -170,6 +190,7 @@ class TestSecurityScoring:
     @pytest.mark.asyncio
     async def test_low_penalty(self):
         from backend.app.services.agents import calculate_security_score
+
         vulns = [{"severity": "LOW", "title": "Test"}]
         score = await calculate_security_score(vulns)
         assert score == 97
@@ -177,6 +198,7 @@ class TestSecurityScoring:
     @pytest.mark.asyncio
     async def test_mixed_severities(self):
         from backend.app.services.agents import calculate_security_score
+
         vulns = [
             {"severity": "CRITICAL"},
             {"severity": "HIGH"},
@@ -190,6 +212,7 @@ class TestSecurityScoring:
     @pytest.mark.asyncio
     async def test_score_floor_at_zero(self):
         from backend.app.services.agents import calculate_security_score
+
         vulns = [{"severity": "CRITICAL"}] * 10
         score = await calculate_security_score(vulns)
         assert score == 0
@@ -197,6 +220,7 @@ class TestSecurityScoring:
     @pytest.mark.asyncio
     async def test_case_insensitive_severity(self):
         from backend.app.services.agents import calculate_security_score
+
         vulns = [{"severity": "critical"}]
         score = await calculate_security_score(vulns)
         assert score == 75
@@ -204,6 +228,7 @@ class TestSecurityScoring:
     @pytest.mark.asyncio
     async def test_unknown_severity_defaults_to_low(self):
         from backend.app.services.agents import calculate_security_score
+
         vulns = [{"severity": "UNKNOWN"}]
         score = await calculate_security_score(vulns)
         assert score == 97
@@ -211,6 +236,7 @@ class TestSecurityScoring:
     @pytest.mark.asyncio
     async def test_missing_severity_defaults_to_low(self):
         from backend.app.services.agents import calculate_security_score
+
         vulns = [{"title": "Test"}]
         score = await calculate_security_score(vulns)
         assert score == 97
@@ -220,12 +246,14 @@ class TestPromptLoading:
 
     def test_security_rules_prompt_exists(self):
         from backend.app.services.agents import _load_prompt
+
         content = _load_prompt("security_rules.txt")
         assert "IaC Configuration to Audit" in content
         assert "{iac_content}" in content
 
     def test_patch_generator_prompt_exists(self):
         from backend.app.services.agents import _load_prompt
+
         content = _load_prompt("patch_generator.txt")
         assert "{iac_content}" in content
         assert "{vulnerabilities}" in content
@@ -233,12 +261,14 @@ class TestPromptLoading:
 
     def test_vision_audit_prompt_exists(self):
         from backend.app.services.agents import _load_prompt
+
         content = _load_prompt("vision_audit.txt")
         assert "STRUCTURAL VERIFICATION" in content
         assert "{iac_content}" in content
 
     def test_nonexistent_prompt_raises(self):
         from backend.app.services.agents import _load_prompt
+
         with pytest.raises(FileNotFoundError):
             _load_prompt("nonexistent_prompt.txt")
 
@@ -247,15 +277,18 @@ class TestConfiguration:
 
     def test_settings_loads(self):
         from backend.app.core.config import settings
+
         assert settings.app_port == 8000
         assert settings.app_host == "0.0.0.0"
 
     def test_settings_has_database_url(self):
         from backend.app.core.config import settings
+
         assert "postgresql" in settings.database_url
 
     def test_settings_has_s3_bucket(self):
         from backend.app.core.config import settings
+
         assert len(settings.s3_bucket_name) > 0
 
 
@@ -267,6 +300,7 @@ class TestStorageService:
         mock_get_client.return_value = mock_client
 
         from backend.app.services.storage import StorageService
+
         svc = StorageService()
         key = svc.upload_file(content="test content", file_name="main.tf")
 
@@ -280,6 +314,7 @@ class TestStorageService:
         mock_get_client.return_value = mock_client
 
         from backend.app.services.storage import StorageService
+
         svc = StorageService()
         patched_key = svc.upload_patched_file(
             original_key="scans/20240101_abc_main.tf",
@@ -298,6 +333,7 @@ class TestStorageService:
         mock_get_client.return_value = mock_client
 
         from backend.app.services.storage import StorageService
+
         svc = StorageService()
         content = svc.download_file("scans/test_key")
 
@@ -310,6 +346,7 @@ class TestStorageService:
         mock_get_client.return_value = mock_client
 
         from backend.app.services.storage import StorageService
+
         svc = StorageService()
         files = svc.list_files()
 
@@ -330,6 +367,7 @@ class TestStorageService:
         mock_get_client.return_value = mock_client
 
         from backend.app.services.storage import StorageService
+
         svc = StorageService()
         files = svc.list_files()
 
@@ -343,6 +381,7 @@ class TestAWSClient:
     @patch("backend.app.core.aws.boto3")
     def test_get_s3_client_uses_endpoint(self, mock_boto3):
         from backend.app.core.aws import get_s3_client
+
         get_s3_client()
         mock_boto3.client.assert_called_once()
         call_kwargs = mock_boto3.client.call_args
@@ -357,5 +396,6 @@ class TestAWSClient:
         mock_boto3.client.return_value = mock_client
 
         from backend.app.core.aws import ensure_bucket_exists
+
         ensure_bucket_exists(client=mock_client)
         mock_client.create_bucket.assert_called_once()

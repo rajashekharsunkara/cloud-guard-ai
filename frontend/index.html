@@ -6,14 +6,14 @@
   <meta name="description" content="CloudGuard AI - IaC security scanner with multi-agent analysis, RAG patching, and architecture diagram validation.">
   <title>CloudGuard AI</title>
   <link rel="stylesheet" href="/static/css/styles.css">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><path d='M50 10 L80 30 L80 60 C80 75 65 85 50 90 C35 85 20 75 20 60 L20 30 Z' fill='%234f8ff7'/></svg>">
 </head>
 <body>
   <div class="app-container">
 
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-logo">
-        <div class="logo-icon">🛡️</div>
+        <div class="logo-icon">CG</div>
         <div>
           <h1>CloudGuard AI</h1>
           <span class="version">v1.0.0</span>
@@ -23,19 +23,15 @@
       <div class="nav-section">
         <div class="nav-section-title">Main</div>
         <div class="nav-item active" data-tab="dashboard" id="nav-dashboard">
-          <span class="nav-icon">📊</span>
           <span>Dashboard</span>
         </div>
         <div class="nav-item" data-tab="scanner" id="nav-scanner">
-          <span class="nav-icon">🔍</span>
           <span>Scanner</span>
         </div>
         <div class="nav-item" data-tab="diagram" id="nav-diagram">
-          <span class="nav-icon">🖼️</span>
           <span>Diagram Validator</span>
         </div>
         <div class="nav-item" data-tab="search" id="nav-search">
-          <span class="nav-icon">🔎</span>
           <span>Semantic Search</span>
         </div>
       </div>
@@ -43,7 +39,6 @@
       <div class="nav-section">
         <div class="nav-section-title">System</div>
         <div class="nav-item" data-tab="history" id="nav-history">
-          <span class="nav-icon">📋</span>
           <span>Audit History</span>
         </div>
       </div>
@@ -73,27 +68,23 @@
             <h2>Dashboard</h2>
             <p class="subtitle">System overview and session metrics</p>
           </div>
-          <button class="btn btn-ghost" onclick="checkHealth()">↻ Refresh</button>
+          <button class="btn btn-ghost" onclick="checkHealth()">Refresh</button>
         </div>
 
         <div class="metrics-grid">
           <div class="metric-card">
-            <div class="metric-icon cyan">🔍</div>
             <div class="metric-value" id="metric-scans">0</div>
             <div class="metric-label">Total Scans</div>
           </div>
           <div class="metric-card">
-            <div class="metric-icon purple">⚠</div>
             <div class="metric-value" id="metric-vulns">0</div>
             <div class="metric-label">Vulnerabilities</div>
           </div>
           <div class="metric-card">
-            <div class="metric-icon green">✓</div>
             <div class="metric-value" id="metric-patches">0</div>
             <div class="metric-label">Patches Generated</div>
           </div>
           <div class="metric-card">
-            <div class="metric-icon amber">↗</div>
             <div class="metric-value" id="metric-rag">0</div>
             <div class="metric-label">RAG Retrievals</div>
           </div>
@@ -105,7 +96,6 @@
           </div>
           <div id="recent-activity">
             <div class="empty-state">
-              <div class="empty-icon">📊</div>
               <h3>No activity yet</h3>
               <p>Run a scan from the Scanner tab to see results here.</p>
             </div>
@@ -216,7 +206,6 @@ resource "aws_s3_bucket" "data" {
         <div class="glass-panel">
           <div class="panel-header"><h3>Architecture Diagram</h3></div>
           <div class="upload-zone" id="diagram-upload-zone">
-            <span class="upload-icon">📁</span>
             <div class="upload-title">Drop your diagram here</div>
             <div class="upload-subtitle">PNG, JPG, or WEBP</div>
             <input type="file" id="diagram-file-input" accept="image/png,image/jpeg,image/webp">
@@ -247,14 +236,12 @@ resource "aws_s3_bucket" "data" {
 
         <div class="glass-panel">
           <div class="search-bar">
-            <span class="search-icon">🔎</span>
             <input type="text" id="search-input" placeholder='e.g. "publicly exposed S3 bucket"'>
             <button class="btn btn-primary" onclick="semanticSearch()" style="padding: 6px 14px;">Search</button>
           </div>
 
           <div id="search-results-container">
             <div class="empty-state">
-              <div class="empty-icon">🔎</div>
               <h3>Vector-powered search</h3>
               <p>Query past audit findings by description. Results are ranked by cosine similarity.</p>
             </div>
@@ -269,13 +256,12 @@ resource "aws_s3_bucket" "data" {
             <h2>Audit History</h2>
             <p class="subtitle">Previous scan results from PostgreSQL</p>
           </div>
-          <button class="btn btn-ghost" onclick="loadHistory()">↻ Refresh</button>
+          <button class="btn btn-ghost" onclick="loadHistory()">Refresh</button>
         </div>
 
         <div class="glass-panel">
           <div id="history-list">
             <div class="empty-state">
-              <div class="empty-icon">📋</div>
               <h3>No audit history</h3>
               <p>Run your first scan to populate this view.</p>
             </div>

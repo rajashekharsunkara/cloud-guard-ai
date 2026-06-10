@@ -44,7 +44,11 @@ class TestAgentsUnit:
         mock_llm = AsyncMock()
         mock_get_llm.return_value = mock_llm
 
-        response_content = "```json\n" + json.dumps([{"title": "Low Issue", "severity": "LOW"}]) + "\n```"
+        response_content = (
+            "```json\n"
+            + json.dumps([{"title": "Low Issue", "severity": "LOW"}])
+            + "\n```"
+        )
         mock_llm.ainvoke.return_value = AIMessage(content=response_content)
 
         result = await run_security_audit("dummy config")
@@ -66,7 +70,9 @@ class TestAgentsUnit:
     async def test_run_patch_generation(self, mock_get_llm):
         mock_llm = AsyncMock()
         mock_get_llm.return_value = mock_llm
-        mock_llm.ainvoke.return_value = AIMessage(content="resource \"aws_s3_bucket\" \"lake\" { acl = \"private\" }")
+        mock_llm.ainvoke.return_value = AIMessage(
+            content='resource "aws_s3_bucket" "lake" { acl = "private" }'
+        )
 
         vulns = [{"title": "Exposed S3 Bucket", "severity": "CRITICAL"}]
         similar = [{"description": "S3 public", "patched_code": "acl = private"}]
@@ -80,7 +86,9 @@ class TestAgentsUnit:
     async def test_run_diagram_analysis(self, mock_get_llm):
         mock_llm = AsyncMock()
         mock_get_llm.return_value = mock_llm
-        mock_llm.ainvoke.return_value = AIMessage(content="Visual verification: code matches diagram.")
+        mock_llm.ainvoke.return_value = AIMessage(
+            content="Visual verification: code matches diagram."
+        )
 
         result = await run_diagram_analysis("terraform code", b"fake_image_bytes")
         assert "verification" in result
@@ -90,14 +98,24 @@ class TestAgentsUnit:
     @patch("backend.app.services.agents.generate_embedding")
     @patch("backend.app.services.agents.run_patch_generation")
     @patch("backend.app.services.agents.run_security_audit")
-    async def test_run_full_audit_orchestration(self, mock_scan, mock_patch, mock_embedding):
-        mock_scan.return_value = [{"title": "Insecure Port", "severity": "HIGH", "description": "Port 22 open"}]
+    async def test_run_full_audit_orchestration(
+        self, mock_scan, mock_patch, mock_embedding
+    ):
+        mock_scan.return_value = [
+            {
+                "title": "Insecure Port",
+                "severity": "HIGH",
+                "description": "Port 22 open",
+            }
+        ]
         mock_patch.return_value = "patched configuration code"
         mock_embedding.return_value = [0.2] * 768
 
         mock_db = MagicMock()
         mock_db.search_similar = AsyncMock(
-            return_value=[{"description": "Past port patch", "patched_code": "close port"}]
+            return_value=[
+                {"description": "Past port patch", "patched_code": "close port"}
+            ]
         )
         mock_db.save_vulnerability = AsyncMock()
 

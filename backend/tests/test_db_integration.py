@@ -26,13 +26,17 @@ async def test_db_init_and_pgvector_extension(test_engine):
     await init_db()
 
     async with test_engine.connect() as conn:
-        result = await conn.execute(text("SELECT extname FROM pg_extension WHERE extname = 'vector'"))
+        result = await conn.execute(
+            text("SELECT extname FROM pg_extension WHERE extname = 'vector'")
+        )
         row = result.fetchone()
         assert row is not None
         assert row[0] == "vector"
 
         table_check = await conn.execute(
-            text("SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = 'vulnerabilities'")
+            text(
+                "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = 'vulnerabilities'"
+            )
         )
         assert table_check.fetchone() is not None
 
@@ -67,7 +71,9 @@ async def test_save_and_retrieve_vulnerability(test_session_factory):
         assert test_records[0]["severity"] == "HIGH"
 
         # Clean up
-        await session.execute(delete(Vulnerability).where(Vulnerability.audit_id == audit_id))
+        await session.execute(
+            delete(Vulnerability).where(Vulnerability.audit_id == audit_id)
+        )
         await session.commit()
 
 
@@ -76,7 +82,9 @@ async def test_vector_similarity_search(test_session_factory):
     async with test_session_factory() as session:
         db_service = DBService(session)
 
-        await session.execute(delete(Vulnerability).where(Vulnerability.audit_id == "sim_test"))
+        await session.execute(
+            delete(Vulnerability).where(Vulnerability.audit_id == "sim_test")
+        )
         await session.commit()
 
         vector_a = [0.5] * 768
@@ -114,5 +122,7 @@ async def test_vector_similarity_search(test_session_factory):
         assert sim_results[1]["similarity_score"] < 0.0
 
         # Clean up
-        await session.execute(delete(Vulnerability).where(Vulnerability.audit_id == "sim_test"))
+        await session.execute(
+            delete(Vulnerability).where(Vulnerability.audit_id == "sim_test")
+        )
         await session.commit()

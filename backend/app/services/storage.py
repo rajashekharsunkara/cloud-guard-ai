@@ -12,7 +12,9 @@ class StorageService:
         self.client = get_s3_client()
         self.bucket = settings.s3_bucket_name
 
-    def upload_file(self, content: str, file_name: str, prefix: str = "scans", unique_id: str = None) -> str:
+    def upload_file(
+        self, content: str, file_name: str, prefix: str = "scans", unique_id: str = None
+    ) -> str:
         """Upload a text file to S3 and return the object key."""
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         if not unique_id:
@@ -45,9 +47,7 @@ class StorageService:
 
     def list_files(self, prefix: str = "scans") -> list[dict]:
         """List all files under a given prefix."""
-        response = self.client.list_objects_v2(
-            Bucket=self.bucket, Prefix=prefix
-        )
+        response = self.client.list_objects_v2(Bucket=self.bucket, Prefix=prefix)
         files = []
         for obj in response.get("Contents", []):
             files.append(

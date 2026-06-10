@@ -74,7 +74,7 @@ class TestAPIIntegration:
                     "resource": "aws_s3_bucket.main",
                 }
             ],
-            "patched_code": "resource \"aws_s3_bucket\" \"main\" { acl = \"private\" }",
+            "patched_code": 'resource "aws_s3_bucket" "main" { acl = "private" }',
             "similar_past_audits": ["S3 bucket is public"],
             "diagram_analysis": None,
         }
@@ -87,6 +87,7 @@ class TestAPIIntegration:
 
         async def override_get_db():
             yield mock_db
+
         app.dependency_overrides[get_db] = override_get_db
 
         payload = {
@@ -103,7 +104,10 @@ class TestAPIIntegration:
             assert len(data["vulnerabilities"]) == 1
             assert data["vulnerabilities"][0]["severity"] == "HIGH"
             assert "patched_code" in data
-            assert data["patched_code"] == "resource \"aws_s3_bucket\" \"main\" { acl = \"private\" }"
+            assert (
+                data["patched_code"]
+                == 'resource "aws_s3_bucket" "main" { acl = "private" }'
+            )
         finally:
             app.dependency_overrides.clear()
 
@@ -130,6 +134,7 @@ class TestAPIIntegration:
 
         async def override_get_db():
             yield mock_scoped_db
+
         app.dependency_overrides[get_db] = override_get_db
 
         payload = {"query": "exposed S3 bucket", "limit": 3}
@@ -166,6 +171,7 @@ class TestAPIIntegration:
 
         async def override_get_db():
             yield mock_scoped_db
+
         app.dependency_overrides[get_db] = override_get_db
 
         try:

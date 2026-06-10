@@ -19,9 +19,7 @@ class TestStorageIntegration:
         # Upload original config
         iac_content = 'resource "aws_security_group" "allow_ssh" { name = "allow_ssh" }'
         original_key = self.storage.upload_file(
-            content=iac_content,
-            file_name="ssh_test.tf",
-            prefix="integration-scans"
+            content=iac_content, file_name="ssh_test.tf", prefix="integration-scans"
         )
 
         assert original_key.startswith("integration-scans/")
@@ -30,8 +28,7 @@ class TestStorageIntegration:
         # Upload patched config
         patched_content = 'resource "aws_security_group" "allow_ssh" { name = "allow_ssh"; ingress = [] }'
         patched_key = self.storage.upload_patched_file(
-            original_key=original_key,
-            patched_content=patched_content
+            original_key=original_key, patched_content=patched_content
         )
 
         assert patched_key.startswith("integration-patches/")

@@ -60,8 +60,12 @@ async def run_security_audit(iac_content: str) -> list[dict]:
     prompt = prompt_template.format(iac_content=iac_content)
 
     response = await llm.ainvoke(
-        [SystemMessage(content="You are a cloud security expert. Always respond with valid JSON."),
-         HumanMessage(content=prompt)]
+        [
+            SystemMessage(
+                content="You are a cloud security expert. Always respond with valid JSON."
+            ),
+            HumanMessage(content=prompt),
+        ]
     )
 
     try:
@@ -69,7 +73,10 @@ async def run_security_audit(iac_content: str) -> list[dict]:
         if content.startswith("```"):
             content = content.split("\n", 1)[1].rsplit("```", 1)[0]
         vulnerabilities = json.loads(content)
-        logger.info("found %d vulnerabilities", len(vulnerabilities) if isinstance(vulnerabilities, list) else 0)
+        logger.info(
+            "found %d vulnerabilities",
+            len(vulnerabilities) if isinstance(vulnerabilities, list) else 0,
+        )
         return vulnerabilities if isinstance(vulnerabilities, list) else []
     except (json.JSONDecodeError, IndexError) as e:
         logger.error("failed to parse auditor response: %s", e)
@@ -102,8 +109,12 @@ async def run_patch_generation(
     )
 
     response = await llm.ainvoke(
-        [SystemMessage(content="You are an IaC security engineer. Output only valid code."),
-         HumanMessage(content=prompt)]
+        [
+            SystemMessage(
+                content="You are an IaC security engineer. Output only valid code."
+            ),
+            HumanMessage(content=prompt),
+        ]
     )
 
     content = response.content.strip()
@@ -112,9 +123,7 @@ async def run_patch_generation(
     return content
 
 
-async def run_diagram_analysis(
-    iac_content: str, image_bytes: bytes
-) -> str:
+async def run_diagram_analysis(iac_content: str, image_bytes: bytes) -> str:
     """Compare architecture diagram against IaC code using Gemini vision."""
     llm = _get_gemini_llm()
     prompt_template = _load_prompt("vision_audit.txt")
@@ -129,9 +138,7 @@ async def run_diagram_analysis(
                     {"type": "text", "text": prompt_text},
                     {
                         "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{image_b64}"
-                        },
+                        "image_url": {"url": f"data:image/png;base64,{image_b64}"},
                     },
                 ]
             )
@@ -170,9 +177,7 @@ async def run_full_audit(
 
     similar_patches = []
     if db_service and vulnerabilities:
-        combined_desc = " | ".join(
-            v.get("description", "") for v in vulnerabilities
-        )
+        combined_desc = " | ".join(v.get("description", "") for v in vulnerabilities)
         query_embedding = await generate_embedding(combined_desc)
         similar_patches = await db_service.search_similar(query_embedding, limit=3)
 
@@ -208,8 +213,6 @@ async def run_full_audit(
         "security_score": security_score,
         "vulnerabilities": vulnerabilities,
         "patched_code": patched_code,
-        "similar_past_audits": [
-            p.get("description", "") for p in similar_patches
-        ],
+        "similar_past_audits": [p.get("description", "") for p in similar_patches],
         "diagram_analysis": diagram_analysis,
     }

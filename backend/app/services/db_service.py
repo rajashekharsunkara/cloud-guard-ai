@@ -27,7 +27,9 @@ class Vulnerability(Base):
     original_code = Column(Text, default="")
     patched_code = Column(Text, default="")
     embedding = Column(Vector(768))
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    created_at = Column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
 
 
 class DBService:
@@ -63,7 +65,9 @@ class DBService:
         self.session.add(vuln)
         await self.session.commit()
         await self.session.refresh(vuln)
-        logger.info(f"saved vulnerability: {vulnerability_type} [{severity}] for audit {audit_id}")
+        logger.info(
+            f"saved vulnerability: {vulnerability_type} [{severity}] for audit {audit_id}"
+        )
         return vuln
 
     async def search_similar(
@@ -101,9 +105,7 @@ class DBService:
     async def get_audit_history(self, limit: int = 20) -> list[dict]:
         """Retrieve recent audit records."""
         stmt = (
-            select(Vulnerability)
-            .order_by(Vulnerability.created_at.desc())
-            .limit(limit)
+            select(Vulnerability).order_by(Vulnerability.created_at.desc()).limit(limit)
         )
         result = await self.session.execute(stmt)
         vulns = result.scalars().all()

@@ -1,4 +1,4 @@
-# 🛡️ CloudGuard AI
+# CloudGuard AI
 
 > AI-powered Infrastructure as Code security auditing with multi-agent LLM orchestration, RAG-based historical patching, and multimodal architecture diagram validation.
 

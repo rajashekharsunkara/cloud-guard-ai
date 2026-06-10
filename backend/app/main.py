@@ -75,6 +75,7 @@ async def global_exception_handler(request: Request, exc: Exception):
         content={"detail": "Internal Server Error", "message": str(exc)},
     )
 
+
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
 
 

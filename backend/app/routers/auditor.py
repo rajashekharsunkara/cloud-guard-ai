@@ -35,6 +35,7 @@ async def health_check(db: AsyncSession = Depends(get_db)):
 
     try:
         from sqlalchemy import text
+
         await db.execute(text("SELECT 1"))
     except Exception:
         logger.exception("Health check database failure")
@@ -48,7 +49,11 @@ async def health_check(db: AsyncSession = Depends(get_db)):
         s3_status = "disconnected"
 
     return HealthResponse(
-        status="healthy" if db_status == "connected" and s3_status == "connected" else "degraded",
+        status=(
+            "healthy"
+            if db_status == "connected" and s3_status == "connected"
+            else "degraded"
+        ),
         database=db_status,
         s3=s3_status,
     )
@@ -201,19 +206,26 @@ async def _stream_audit_events(
     if vulnerabilities:
         yield send_event("patch_generation", "running", "Generating secure code...")
         from backend.app.services.agents import run_patch_generation
+
         patched_code = await run_patch_generation(
             iac_content, vulnerabilities, similar_patches
         )
-        yield send_event("patch_generation", "complete", "Patched code generated", patched_code)
+        yield send_event(
+            "patch_generation", "complete", "Patched code generated", patched_code
+        )
     else:
         patched_code = ""
 
     from backend.app.services.agents import calculate_security_score
+
     score = await calculate_security_score(vulnerabilities)
-    yield send_event("scoring", "complete", f"Security Score: {score}/100", {"score": score})
+    yield send_event(
+        "scoring", "complete", f"Security Score: {score}/100", {"score": score}
+    )
 
     yield send_event("storage", "running", "Storing results...")
     import uuid as _uuid
+
     audit_id = _uuid.uuid4().hex[:12]
     await _save_audit_vulnerabilities(
         db_service, audit_id, file_name, iac_content, patched_code, vulnerabilities
