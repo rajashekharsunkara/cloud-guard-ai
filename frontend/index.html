@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="CloudGuard AI - IaC security scanner with multi-agent analysis, RAG patching, and architecture diagram validation.">
+  <title>CloudGuard AI</title>
+  <link rel="stylesheet" href="/static/css/styles.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+</head>
+<body>
+  <div class="app-container">
+
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-logo">
+        <div class="logo-icon">🛡️</div>
+        <div>
+          <h1>CloudGuard AI</h1>
+          <span class="version">v1.0.0</span>
+        </div>
+      </div>
+
+      <div class="nav-section">
+        <div class="nav-section-title">Main</div>
+        <div class="nav-item active" data-tab="dashboard" id="nav-dashboard">
+          <span class="nav-icon">📊</span>
+          <span>Dashboard</span>
+        </div>
+        <div class="nav-item" data-tab="scanner" id="nav-scanner">
+          <span class="nav-icon">🔍</span>
+          <span>Scanner</span>
+        </div>
+        <div class="nav-item" data-tab="diagram" id="nav-diagram">
+          <span class="nav-icon">🖼️</span>
+          <span>Diagram Validator</span>
+        </div>
+        <div class="nav-item" data-tab="search" id="nav-search">
+          <span class="nav-icon">🔎</span>
+          <span>Semantic Search</span>
+        </div>
+      </div>
+
+      <div class="nav-section">
+        <div class="nav-section-title">System</div>
+        <div class="nav-item" data-tab="history" id="nav-history">
+          <span class="nav-icon">📋</span>
+          <span>Audit History</span>
+        </div>
+      </div>
+
+      <div class="sidebar-status" id="system-status">
+        <div class="status-row">
+          <span class="label">FastAPI</span>
+          <span><span class="status-dot" id="status-api"></span><span id="status-api-text">...</span></span>
+        </div>
+        <div class="status-row">
+          <span class="label">PostgreSQL</span>
+          <span><span class="status-dot" id="status-db"></span><span id="status-db-text">...</span></span>
+        </div>
+        <div class="status-row">
+          <span class="label">S3 Storage</span>
+          <span><span class="status-dot" id="status-s3"></span><span id="status-s3-text">...</span></span>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main-content">
+
+      <!-- Dashboard -->
+      <div class="tab-view active" id="tab-dashboard">
+        <div class="page-header">
+          <div>
+            <h2>Dashboard</h2>
+            <p class="subtitle">System overview and session metrics</p>
+          </div>
+          <button class="btn btn-ghost" onclick="checkHealth()">↻ Refresh</button>
+        </div>
+
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div class="metric-icon cyan">🔍</div>
+            <div class="metric-value" id="metric-scans">0</div>
+            <div class="metric-label">Total Scans</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-icon purple">⚠</div>
+            <div class="metric-value" id="metric-vulns">0</div>
+            <div class="metric-label">Vulnerabilities</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-icon green">✓</div>
+            <div class="metric-value" id="metric-patches">0</div>
+            <div class="metric-label">Patches Generated</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-icon amber">↗</div>
+            <div class="metric-value" id="metric-rag">0</div>
+            <div class="metric-label">RAG Retrievals</div>
+          </div>
+        </div>
+
+        <div class="glass-panel">
+          <div class="panel-header">
+            <h3>Recent Activity</h3>
+          </div>
+          <div id="recent-activity">
+            <div class="empty-state">
+              <div class="empty-icon">📊</div>
+              <h3>No activity yet</h3>
+              <p>Run a scan from the Scanner tab to see results here.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Scanner -->
+      <div class="tab-view" id="tab-scanner">
+        <div class="page-header">
+          <div>
+            <h2>IaC Security Scanner</h2>
+            <p class="subtitle">Paste Terraform or Docker Compose configs to scan for vulnerabilities</p>
+          </div>
+        </div>
+
+        <div class="glass-panel">
+          <div class="panel-header">
+            <h3>Configuration</h3>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <label for="file-name-input" style="font-size: 0.72rem; color: var(--text-muted);">Filename:</label>
+              <input type="text" id="file-name-input" value="main.tf"
+                style="background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; color: var(--text); font-family: var(--font-mono); font-size: 0.78rem; width: 130px;">
+            </div>
+          </div>
+
+          <textarea class="iac-textarea" id="iac-input" placeholder='# Paste your IaC configuration here...
+
+resource "aws_s3_bucket" "data" {
+  bucket = "my-data-bucket"
+  acl    = "public-read"
+}'></textarea>
+
+          <div style="display: flex; gap: 10px; margin-top: 14px;">
+            <button class="btn btn-primary" id="btn-scan" onclick="startScan()">Run Audit</button>
+            <button class="btn btn-ghost" id="btn-scan-stream" onclick="startStreamScan()">Stream (SSE)</button>
+            <button class="btn btn-ghost" onclick="loadSampleTerraform()">Load Sample</button>
+          </div>
+        </div>
+
+        <div class="glass-panel" id="sse-timeline-panel" style="display: none;">
+          <div class="panel-header">
+            <h3>Pipeline Progress</h3>
+          </div>
+          <div class="timeline" id="sse-timeline"></div>
+        </div>
+
+        <div id="scan-results" style="display: none;">
+          <div class="glass-panel" style="text-align: center;">
+            <h3 style="margin-bottom: 6px;">Security Score</h3>
+            <div class="score-gauge" id="score-gauge">
+              <svg viewBox="0 0 120 120">
+                <circle class="track" cx="60" cy="60" r="52"></circle>
+                <circle class="fill" id="score-circle" cx="60" cy="60" r="52"
+                  stroke-dasharray="326.7" stroke-dashoffset="326.7"></circle>
+              </svg>
+              <div class="score-text">
+                <div class="score-value" id="score-display">0</div>
+                <div class="score-label">out of 100</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="glass-panel">
+            <div class="panel-header">
+              <h3>Vulnerabilities</h3>
+              <span id="vuln-count" style="font-size: 0.75rem; color: var(--text-muted);"></span>
+            </div>
+            <div class="vuln-list" id="vuln-list"></div>
+          </div>
+
+          <div class="glass-panel">
+            <div class="panel-header">
+              <h3>Code Comparison</h3>
+            </div>
+            <div class="code-container">
+              <div class="code-pane">
+                <div class="code-pane-header">
+                  Original <span class="tag original">Vulnerable</span>
+                </div>
+                <pre class="code-content" id="code-original"></pre>
+              </div>
+              <div class="code-pane">
+                <div class="code-pane-header">
+                  Patched <span class="tag patched">Secure</span>
+                </div>
+                <pre class="code-content" id="code-patched"></pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Diagram Validator -->
+      <div class="tab-view" id="tab-diagram">
+        <div class="page-header">
+          <div>
+            <h2>Diagram Validator</h2>
+            <p class="subtitle">Upload a cloud architecture diagram to compare against your Terraform code</p>
+          </div>
+        </div>
+
+        <div class="glass-panel">
+          <div class="panel-header"><h3>Terraform Configuration</h3></div>
+          <textarea class="iac-textarea" id="diagram-iac-input" placeholder="# Paste Terraform code to validate against diagram..."></textarea>
+        </div>
+
+        <div class="glass-panel">
+          <div class="panel-header"><h3>Architecture Diagram</h3></div>
+          <div class="upload-zone" id="diagram-upload-zone">
+            <span class="upload-icon">📁</span>
+            <div class="upload-title">Drop your diagram here</div>
+            <div class="upload-subtitle">PNG, JPG, or WEBP</div>
+            <input type="file" id="diagram-file-input" accept="image/png,image/jpeg,image/webp">
+          </div>
+          <div class="diagram-preview" id="diagram-preview" style="display: none;">
+            <img id="diagram-preview-img" alt="Diagram preview">
+          </div>
+        </div>
+
+        <button class="btn btn-primary" id="btn-diagram-audit" onclick="startDiagramAudit()" disabled>
+          Validate Diagram
+        </button>
+
+        <div class="glass-panel" id="diagram-results" style="display: none; margin-top: 20px;">
+          <div class="panel-header"><h3>Drift Analysis</h3></div>
+          <div id="diagram-analysis-content" class="code-content" style="white-space: pre-wrap;"></div>
+        </div>
+      </div>
+
+      <!-- Semantic Search -->
+      <div class="tab-view" id="tab-search">
+        <div class="page-header">
+          <div>
+            <h2>Semantic Search</h2>
+            <p class="subtitle">Search past audit findings using natural language queries</p>
+          </div>
+        </div>
+
+        <div class="glass-panel">
+          <div class="search-bar">
+            <span class="search-icon">🔎</span>
+            <input type="text" id="search-input" placeholder='e.g. "publicly exposed S3 bucket"'>
+            <button class="btn btn-primary" onclick="semanticSearch()" style="padding: 6px 14px;">Search</button>
+          </div>
+
+          <div id="search-results-container">
+            <div class="empty-state">
+              <div class="empty-icon">🔎</div>
+              <h3>Vector-powered search</h3>
+              <p>Query past audit findings by description. Results are ranked by cosine similarity.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Audit History -->
+      <div class="tab-view" id="tab-history">
+        <div class="page-header">
+          <div>
+            <h2>Audit History</h2>
+            <p class="subtitle">Previous scan results from PostgreSQL</p>
+          </div>
+          <button class="btn btn-ghost" onclick="loadHistory()">↻ Refresh</button>
+        </div>
+
+        <div class="glass-panel">
+          <div id="history-list">
+            <div class="empty-state">
+              <div class="empty-icon">📋</div>
+              <h3>No audit history</h3>
+              <p>Run your first scan to populate this view.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

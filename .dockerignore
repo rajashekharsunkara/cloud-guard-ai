@@ -1,0 +1,12 @@
+.git
+.gitignore
+.env
+.terraform
+*.tfstate*
+__pycache__
+*.py[cod]
+venv/
+.venv/
+terraform/
+.github/
+README.md
