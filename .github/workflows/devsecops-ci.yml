@@ -1,4 +1,4 @@
-name: DevSecOps CI
+name: CloudGuard AI Security Scan & Container Build
 
 on:
   push:
@@ -7,7 +7,8 @@ on:
     branches: [main]
 
 jobs:
-  lint-and-test:
+  code-quality-and-test-suite:
+    name: Code Quality and Test Suite
     runs-on: ubuntu-latest
 
     services:
@@ -25,30 +26,43 @@ jobs:
         ports:
           - 5432:5432
 
+      localstack:
+        image: localstack/localstack:3.8.0
+        env:
+          SERVICES: s3
+          AWS_DEFAULT_REGION: us-east-1
+        options: >-
+          --health-cmd "curl -f http://localhost:4566/_localstack/health"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 4566:4566
+
     steps:
-      - name: Checkout Code
+      - name: Checkout Repository Code
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
+      - name: Install Python 3.12 Environment
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install Dependencies
+      - name: Install Backend Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install flake8 black
 
-      - name: Lint with flake8
+      - name: Run Flake8 PEP 8 & Complexity Checks
         run: |
           flake8 backend/ --count --select=E9,F63,F7,F82 --show-source --statistics
           flake8 backend/ --count --max-complexity=10 --max-line-length=120 --statistics
 
-      - name: Format Check with black
+      - name: Verify Black Code Formatting
         run: black --check backend/
 
-      - name: Run Tests
+      - name: Execute Pytest Integration & Unit Tests
         env:
           DATABASE_URL: postgresql+asyncpg://cloudguard:cloudguard_secret@localhost:5432/cloudguard_db
           GROQ_API_KEY: test_key
@@ -59,12 +73,13 @@ jobs:
           S3_BUCKET_NAME: cloudguard-artifacts
         run: pytest backend/tests/ -v --tb=short
 
-  docker-build:
+  container-image-build:
+    name: Container Image Build
     runs-on: ubuntu-latest
-    needs: lint-and-test
+    needs: code-quality-and-test-suite
     steps:
-      - name: Checkout Code
+      - name: Checkout Repository Code
         uses: actions/checkout@v4
 
-      - name: Build Docker Image
+      - name: Build Production Docker Container
         run: docker build -t cloudguard-ai:test .
