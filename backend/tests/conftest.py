@@ -28,4 +28,3 @@ def setup_test_s3_bucket():
         ensure_bucket_exists()
     except Exception:
         pass
-
