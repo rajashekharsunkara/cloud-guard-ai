@@ -123,97 +123,123 @@ async def audit_with_diagram(
     return result
 
 
+async def _get_historical_patches(
+    db_service: DBService, vulnerabilities: list[dict]
+) -> list[dict]:
+    """Retrieve similar historical patches for RAG context."""
+    if not vulnerabilities:
+        return []
+    combined_desc = " | ".join(v.get("description", "") for v in vulnerabilities)
+    try:
+        query_embedding = await generate_embedding(combined_desc)
+        return await db_service.search_similar(query_embedding, limit=3)
+    except Exception:
+        return []
+
+
+async def _save_audit_vulnerabilities(
+    db_service: DBService,
+    audit_id: str,
+    file_name: str,
+    iac_content: str,
+    patched_code: str,
+    vulnerabilities: list[dict],
+) -> None:
+    """Persist all found vulnerabilities to the database."""
+    for vuln in vulnerabilities:
+        try:
+            desc = vuln.get("description", "")
+            embedding = await generate_embedding(desc)
+            await db_service.save_vulnerability(
+                audit_id=audit_id,
+                file_name=file_name,
+                vulnerability_type=vuln.get("title", "Unknown"),
+                severity=vuln.get("severity", "LOW"),
+                description=desc,
+                resource=vuln.get("resource", ""),
+                original_code=iac_content[:2000],
+                patched_code=patched_code[:2000],
+                embedding=embedding,
+            )
+        except Exception:
+            pass
+
+
+async def _stream_audit_events(
+    iac_content: str,
+    file_name: str,
+    db: AsyncSession,
+):
+    """Event generator helper for SSE auditing to keep complexity low."""
+    db_service = DBService(db)
+
+    def send_event(step, status, message=None, data=None):
+        payload = {"step": step, "status": status}
+        if message is not None:
+            payload["message"] = message
+        if data is not None:
+            payload["data"] = data
+        return f"data: {json.dumps(payload)}\n\n"
+
+    yield send_event("security_scan", "running", "Scanning configuration...")
+    vulnerabilities = await run_security_audit(iac_content)
+    yield send_event(
+        "security_scan",
+        "complete",
+        f"Found {len(vulnerabilities)} vulnerabilities",
+        vulnerabilities,
+    )
+
+    yield send_event("rag_retrieval", "running", "Searching historical patches...")
+    similar_patches = await _get_historical_patches(db_service, vulnerabilities)
+    yield send_event(
+        "rag_retrieval",
+        "complete",
+        f"Retrieved {len(similar_patches)} similar past patches",
+    )
+
+    if vulnerabilities:
+        yield send_event("patch_generation", "running", "Generating secure code...")
+        from backend.app.services.agents import run_patch_generation
+        patched_code = await run_patch_generation(
+            iac_content, vulnerabilities, similar_patches
+        )
+        yield send_event("patch_generation", "complete", "Patched code generated", patched_code)
+    else:
+        patched_code = ""
+
+    from backend.app.services.agents import calculate_security_score
+    score = await calculate_security_score(vulnerabilities)
+    yield send_event("scoring", "complete", f"Security Score: {score}/100", {"score": score})
+
+    yield send_event("storage", "running", "Storing results...")
+    import uuid as _uuid
+    audit_id = _uuid.uuid4().hex[:12]
+    await _save_audit_vulnerabilities(
+        db_service, audit_id, file_name, iac_content, patched_code, vulnerabilities
+    )
+    yield send_event("storage", "complete", "Results persisted")
+
+    yield send_event(
+        "done",
+        "complete",
+        data={
+            "audit_id": audit_id,
+            "security_score": score,
+            "vulnerabilities": vulnerabilities,
+            "patched_code": patched_code,
+        },
+    )
+
+
 @router.post("/audit/stream")
 async def audit_stream(
     request: AuditRequest,
     db: AsyncSession = Depends(get_db),
 ):
     """Stream audit progress via Server-Sent Events."""
-
-    async def event_generator():
-        db_service = DBService(db)
-
-        def send_event(step, status, message=None, data=None):
-            payload = {"step": step, "status": status}
-            if message is not None:
-                payload["message"] = message
-            if data is not None:
-                payload["data"] = data
-            return f"data: {json.dumps(payload)}\n\n"
-
-        yield send_event("security_scan", "running", "Scanning configuration...")
-        vulnerabilities = await run_security_audit(request.iac_content)
-        yield send_event(
-            "security_scan",
-            "complete",
-            f"Found {len(vulnerabilities)} vulnerabilities",
-            vulnerabilities,
-        )
-
-        similar_patches = []
-        if vulnerabilities:
-            yield send_event("rag_retrieval", "running", "Searching historical patches...")
-            combined_desc = " | ".join(v.get("description", "") for v in vulnerabilities)
-            try:
-                query_embedding = await generate_embedding(combined_desc)
-                similar_patches = await db_service.search_similar(query_embedding, limit=3)
-            except Exception:
-                similar_patches = []
-            yield send_event(
-                "rag_retrieval",
-                "complete",
-                f"Retrieved {len(similar_patches)} similar past patches",
-            )
-
-        if vulnerabilities:
-            yield send_event("patch_generation", "running", "Generating secure code...")
-            from backend.app.services.agents import run_patch_generation
-            patched_code = await run_patch_generation(
-                request.iac_content, vulnerabilities, similar_patches
-            )
-            yield send_event("patch_generation", "complete", "Patched code generated", patched_code)
-        else:
-            patched_code = ""
-
-        from backend.app.services.agents import calculate_security_score
-        score = await calculate_security_score(vulnerabilities)
-        yield send_event("scoring", "complete", f"Security Score: {score}/100", {"score": score})
-
-        yield send_event("storage", "running", "Storing results...")
-        import uuid as _uuid
-        audit_id = _uuid.uuid4().hex[:12]
-        for vuln in vulnerabilities:
-            try:
-                desc = vuln.get("description", "")
-                embedding = await generate_embedding(desc)
-                await db_service.save_vulnerability(
-                    audit_id=audit_id,
-                    file_name=request.file_name,
-                    vulnerability_type=vuln.get("title", "Unknown"),
-                    severity=vuln.get("severity", "LOW"),
-                    description=desc,
-                    resource=vuln.get("resource", ""),
-                    original_code=request.iac_content[:2000],
-                    patched_code=patched_code[:2000],
-                    embedding=embedding,
-                )
-            except Exception:
-                pass
-        yield send_event("storage", "complete", "Results persisted")
-
-        yield send_event(
-            "done",
-            "complete",
-            data={
-                "audit_id": audit_id,
-                "security_score": score,
-                "vulnerabilities": vulnerabilities,
-                "patched_code": patched_code,
-            },
-        )
-
     return StreamingResponse(
-        event_generator(),
+        _stream_audit_events(request.iac_content, request.file_name, db),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
