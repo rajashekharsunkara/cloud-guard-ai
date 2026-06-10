@@ -1,6 +1,6 @@
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
-from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import DeclarativeBase
 
 from backend.app.core.config import settings
 
@@ -30,7 +30,6 @@ async def init_db() -> None:
 
 
 async def get_db() -> AsyncSession:
-    """Yield an async database session."""
     async with async_session() as session:
         try:
             yield session

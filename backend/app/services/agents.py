@@ -1,13 +1,13 @@
+import base64
 import json
 import logging
 import uuid
-import base64
 from pathlib import Path
 from typing import Optional
 
-from langchain_groq import ChatGroq
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from langchain_groq import ChatGroq
 
 from backend.app.core.config import settings
 
@@ -46,14 +46,12 @@ def _get_embedding_model() -> GoogleGenerativeAIEmbeddings:
 
 
 async def generate_embedding(text: str) -> list[float]:
-    """Generate a 768-dim vector embedding for the given text."""
     model = _get_embedding_model()
     embedding = await model.aembed_query(text)
     return embedding
 
 
 async def run_security_audit(iac_content: str) -> list[dict]:
-    """Scan IaC configuration for vulnerabilities using Groq."""
     logger.info("scanning IaC configuration (%d chars)", len(iac_content))
     llm = _get_groq_llm()
     prompt_template = _load_prompt("security_rules.txt")
@@ -88,7 +86,6 @@ async def run_patch_generation(
     vulnerabilities: list[dict],
     similar_patches: list[dict],
 ) -> str:
-    """Generate remediated IaC code using historical patches as RAG context."""
     logger.info("generating patched code with %d RAG patches", len(similar_patches))
     llm = _get_groq_llm()
     prompt_template = _load_prompt("patch_generator.txt")
@@ -124,7 +121,6 @@ async def run_patch_generation(
 
 
 async def run_diagram_analysis(iac_content: str, image_bytes: bytes) -> str:
-    """Compare architecture diagram against IaC code using Gemini vision."""
     llm = _get_gemini_llm()
     prompt_template = _load_prompt("vision_audit.txt")
     prompt_text = prompt_template.format(iac_content=iac_content)
@@ -168,7 +164,6 @@ async def run_full_audit(
     db_service=None,
     image_bytes: Optional[bytes] = None,
 ) -> dict:
-    """Run the complete multi-agent audit pipeline."""
     audit_id = uuid.uuid4().hex[:12]
     logger.info("starting audit %s for %s", audit_id, file_name)
 

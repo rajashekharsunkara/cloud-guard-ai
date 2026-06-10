@@ -2,26 +2,27 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.app.core.config import settings
 from backend.app.core.database import get_db
 from backend.app.schemas.auditor import (
     AuditRequest,
     AuditResult,
+    HealthResponse,
     SearchRequest,
     SearchResponse,
     SearchResultItem,
-    HealthResponse,
+)
+from backend.app.services.agents import (
+    generate_embedding,
+    run_full_audit,
+    run_security_audit,
 )
 from backend.app.services.db_service import DBService
 from backend.app.services.storage import StorageService
-from backend.app.services.agents import (
-    run_full_audit,
-    generate_embedding,
-    run_security_audit,
-)
 
 logger = logging.getLogger("cloudguard.auditor")
 router = APIRouter(prefix="/api", tags=["auditor"])
@@ -56,6 +57,7 @@ async def health_check(db: AsyncSession = Depends(get_db)):
         ),
         database=db_status,
         s3=s3_status,
+        environment=settings.app_env,
     )
 
 
@@ -131,7 +133,6 @@ async def audit_with_diagram(
 async def _get_historical_patches(
     db_service: DBService, vulnerabilities: list[dict]
 ) -> list[dict]:
-    """Retrieve similar historical patches for RAG context."""
     if not vulnerabilities:
         return []
     combined_desc = " | ".join(v.get("description", "") for v in vulnerabilities)
@@ -150,7 +151,6 @@ async def _save_audit_vulnerabilities(
     patched_code: str,
     vulnerabilities: list[dict],
 ) -> None:
-    """Persist all found vulnerabilities to the database."""
     for vuln in vulnerabilities:
         try:
             desc = vuln.get("description", "")
@@ -167,7 +167,9 @@ async def _save_audit_vulnerabilities(
                 embedding=embedding,
             )
         except Exception:
-            pass
+            logger.warning(
+                "failed to save vulnerability for audit %s", audit_id, exc_info=True
+            )
 
 
 async def _stream_audit_events(
@@ -175,7 +177,6 @@ async def _stream_audit_events(
     file_name: str,
     db: AsyncSession,
 ):
-    """Event generator helper for SSE auditing to keep complexity low."""
     db_service = DBService(db)
 
     def send_event(step, status, message=None, data=None):

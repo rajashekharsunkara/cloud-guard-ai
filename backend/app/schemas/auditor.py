@@ -1,6 +1,7 @@
-from pydantic import BaseModel, Field
-from typing import Optional
 from datetime import datetime, timezone
+from typing import Optional
+
+from pydantic import BaseModel, Field
 
 
 class AuditRequest(BaseModel):
@@ -38,7 +39,6 @@ class AuditResult(BaseModel):
     security_score: int = Field(..., ge=0, le=100, description="Overall security score")
     vulnerabilities: list[VulnerabilityItem] = []
     patched_code: str = Field(default="", description="Remediated IaC configuration")
-    cost_insights: str = Field(default="", description="FinOps analysis summary")
     diagram_analysis: Optional[str] = Field(
         default=None, description="Diagram drift analysis (if image provided)"
     )
@@ -67,4 +67,4 @@ class HealthResponse(BaseModel):
     status: str = "healthy"
     database: str = "connected"
     s3: str = "connected"
-    environment: str = "development"
+    environment: str = ""

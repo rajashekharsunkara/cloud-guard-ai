@@ -3,9 +3,9 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Column, String, Text, DateTime, select
-from sqlalchemy.ext.asyncio import AsyncSession
 from pgvector.sqlalchemy import Vector
+from sqlalchemy import Column, DateTime, String, Text, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.database import Base
 
@@ -13,8 +13,6 @@ logger = logging.getLogger("cloudguard.db")
 
 
 class Vulnerability(Base):
-    """Audit finding with a vector embedding for similarity search."""
-
     __tablename__ = "vulnerabilities"
 
     id = Column(String, primary_key=True, default=lambda: uuid.uuid4().hex)
@@ -33,8 +31,6 @@ class Vulnerability(Base):
 
 
 class DBService:
-    """Database read/write operations."""
-
     def __init__(self, session: AsyncSession):
         self.session = session
 
@@ -50,7 +46,6 @@ class DBService:
         patched_code: str = "",
         embedding: Optional[list[float]] = None,
     ) -> Vulnerability:
-        """Save a vulnerability finding with its vector embedding."""
         vuln = Vulnerability(
             audit_id=audit_id,
             file_name=file_name,
@@ -66,14 +61,16 @@ class DBService:
         await self.session.commit()
         await self.session.refresh(vuln)
         logger.info(
-            f"saved vulnerability: {vulnerability_type} [{severity}] for audit {audit_id}"
+            "saved vulnerability: %s [%s] for audit %s",
+            vulnerability_type,
+            severity,
+            audit_id,
         )
         return vuln
 
     async def search_similar(
         self, query_embedding: list[float], limit: int = 5
     ) -> list[dict]:
-        """Find similar vulnerabilities using pgvector cosine distance."""
         stmt = (
             select(
                 Vulnerability,
@@ -88,7 +85,7 @@ class DBService:
 
         result = await self.session.execute(stmt)
         rows = result.all()
-        logger.info(f"search returned {len(rows)} similar vulnerabilities")
+        logger.info("search returned %d similar vulnerabilities", len(rows))
 
         return [
             {
@@ -103,7 +100,6 @@ class DBService:
         ]
 
     async def get_audit_history(self, limit: int = 20) -> list[dict]:
-        """Retrieve recent audit records."""
         stmt = (
             select(Vulnerability).order_by(Vulnerability.created_at.desc()).limit(limit)
         )

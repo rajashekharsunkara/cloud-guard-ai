@@ -1,9 +1,9 @@
 import boto3
+
 from backend.app.core.config import settings
 
 
 def get_s3_client():
-    """Return an S3 client configured for LocalStack or AWS."""
     return boto3.client(
         "s3",
         endpoint_url=settings.aws_endpoint_url,
@@ -14,7 +14,6 @@ def get_s3_client():
 
 
 def ensure_bucket_exists(client=None) -> None:
-    """Create the S3 bucket if it doesn't already exist."""
     client = client or get_s3_client()
     try:
         client.head_bucket(Bucket=settings.s3_bucket_name)
