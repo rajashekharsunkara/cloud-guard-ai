@@ -24,6 +24,7 @@ database.async_session = async_sessionmaker(
 def setup_test_s3_bucket():
     """Ensure S3 bucket exists in LocalStack before running test suite."""
     from backend.app.core.aws import ensure_bucket_exists
+
     try:
         ensure_bucket_exists()
     except Exception:
