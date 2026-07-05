@@ -156,47 +156,36 @@ class TestSchemaValidation:
 
 class TestSecurityScoring:
 
-    @pytest.mark.asyncio
-    async def test_perfect_score(self):
+    def test_perfect_score(self):
         from backend.app.services.agents import calculate_security_score
 
-        score = await calculate_security_score([])
-        assert score == 100
+        assert calculate_security_score([]) == 100
 
-    @pytest.mark.asyncio
-    async def test_critical_penalty(self):
+    def test_critical_penalty(self):
         from backend.app.services.agents import calculate_security_score
 
         vulns = [{"severity": "CRITICAL", "title": "Test"}]
-        score = await calculate_security_score(vulns)
-        assert score == 75
+        assert calculate_security_score(vulns) == 75
 
-    @pytest.mark.asyncio
-    async def test_high_penalty(self):
+    def test_high_penalty(self):
         from backend.app.services.agents import calculate_security_score
 
         vulns = [{"severity": "HIGH", "title": "Test"}]
-        score = await calculate_security_score(vulns)
-        assert score == 85
+        assert calculate_security_score(vulns) == 85
 
-    @pytest.mark.asyncio
-    async def test_medium_penalty(self):
+    def test_medium_penalty(self):
         from backend.app.services.agents import calculate_security_score
 
         vulns = [{"severity": "MEDIUM", "title": "Test"}]
-        score = await calculate_security_score(vulns)
-        assert score == 92
+        assert calculate_security_score(vulns) == 92
 
-    @pytest.mark.asyncio
-    async def test_low_penalty(self):
+    def test_low_penalty(self):
         from backend.app.services.agents import calculate_security_score
 
         vulns = [{"severity": "LOW", "title": "Test"}]
-        score = await calculate_security_score(vulns)
-        assert score == 97
+        assert calculate_security_score(vulns) == 97
 
-    @pytest.mark.asyncio
-    async def test_mixed_severities(self):
+    def test_mixed_severities(self):
         from backend.app.services.agents import calculate_security_score
 
         vulns = [
@@ -205,41 +194,32 @@ class TestSecurityScoring:
             {"severity": "MEDIUM"},
             {"severity": "LOW"},
         ]
-        score = await calculate_security_score(vulns)
         # 100 - 25 - 15 - 8 - 3 = 49
-        assert score == 49
+        assert calculate_security_score(vulns) == 49
 
-    @pytest.mark.asyncio
-    async def test_score_floor_at_zero(self):
+    def test_score_floor_at_zero(self):
         from backend.app.services.agents import calculate_security_score
 
         vulns = [{"severity": "CRITICAL"}] * 10
-        score = await calculate_security_score(vulns)
-        assert score == 0
+        assert calculate_security_score(vulns) == 0
 
-    @pytest.mark.asyncio
-    async def test_case_insensitive_severity(self):
+    def test_case_insensitive_severity(self):
         from backend.app.services.agents import calculate_security_score
 
         vulns = [{"severity": "critical"}]
-        score = await calculate_security_score(vulns)
-        assert score == 75
+        assert calculate_security_score(vulns) == 75
 
-    @pytest.mark.asyncio
-    async def test_unknown_severity_defaults_to_low(self):
+    def test_unknown_severity_defaults_to_low(self):
         from backend.app.services.agents import calculate_security_score
 
         vulns = [{"severity": "UNKNOWN"}]
-        score = await calculate_security_score(vulns)
-        assert score == 97
+        assert calculate_security_score(vulns) == 97
 
-    @pytest.mark.asyncio
-    async def test_missing_severity_defaults_to_low(self):
+    def test_missing_severity_defaults_to_low(self):
         from backend.app.services.agents import calculate_security_score
 
         vulns = [{"title": "Test"}]
-        score = await calculate_security_score(vulns)
-        assert score == 97
+        assert calculate_security_score(vulns) == 97
 
 
 class TestPromptLoading:
@@ -389,10 +369,12 @@ class TestAWSClient:
 
     @patch("backend.app.core.aws.boto3")
     def test_ensure_bucket_exists_creates_when_missing(self, mock_boto3):
+        from botocore.exceptions import ClientError
+
         mock_client = MagicMock()
-        mock_client.head_bucket.side_effect = mock_client.exceptions.ClientError
-        mock_client.exceptions.ClientError = Exception
-        mock_client.head_bucket.side_effect = Exception("Not found")
+        mock_client.head_bucket.side_effect = ClientError(
+            {"Error": {"Code": "404", "Message": "Not Found"}}, "HeadBucket"
+        )
         mock_boto3.client.return_value = mock_client
 
         from backend.app.core.aws import ensure_bucket_exists

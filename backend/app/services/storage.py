@@ -1,8 +1,17 @@
+import re
 import uuid
 from datetime import datetime, timezone
+from pathlib import PurePosixPath
+from typing import Optional
 
 from backend.app.core.aws import get_s3_client
 from backend.app.core.config import settings
+
+
+def _safe_name(file_name: str) -> str:
+    """Reduce a client-supplied filename to a flat, S3-safe basename."""
+    base = PurePosixPath(file_name.replace("\\", "/")).name or "config"
+    return re.sub(r"[^A-Za-z0-9._-]", "_", base)
 
 
 class StorageService:
@@ -11,12 +20,16 @@ class StorageService:
         self.bucket = settings.s3_bucket_name
 
     def upload_file(
-        self, content: str, file_name: str, prefix: str = "scans", unique_id: str = None
+        self,
+        content: str,
+        file_name: str,
+        prefix: str = "scans",
+        unique_id: Optional[str] = None,
     ) -> str:
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         if not unique_id:
             unique_id = uuid.uuid4().hex[:8]
-        key = f"{prefix}/{timestamp}_{unique_id}_{file_name}"
+        key = f"{prefix}/{timestamp}_{unique_id}_{_safe_name(file_name)}"
 
         self.client.put_object(
             Bucket=self.bucket,

@@ -1,1 +1,0 @@
-# CloudGuard AI - Test Suite

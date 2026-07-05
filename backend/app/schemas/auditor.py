@@ -9,10 +9,12 @@ class AuditRequest(BaseModel):
         ...,
         description="Raw Terraform or Docker Compose configuration content",
         min_length=10,
+        max_length=120_000,
     )
     file_name: str = Field(
         default="main.tf",
         description="Original filename for context",
+        max_length=255,
     )
 
 
@@ -21,14 +23,17 @@ class SearchRequest(BaseModel):
         ...,
         description="Natural language search query",
         min_length=3,
+        max_length=1000,
     )
     limit: int = Field(default=5, ge=1, le=20, description="Max results to return")
 
 
 class VulnerabilityItem(BaseModel):
-    severity: str = Field(..., description="CRITICAL, HIGH, MEDIUM, or LOW")
-    title: str = Field(..., description="Short vulnerability title")
-    description: str = Field(..., description="Detailed explanation")
+    severity: str = Field(default="LOW", description="CRITICAL, HIGH, MEDIUM, or LOW")
+    title: str = Field(
+        default="Untitled finding", description="Short vulnerability title"
+    )
+    description: str = Field(default="", description="Detailed explanation")
     resource: str = Field(default="", description="Affected Terraform resource")
     remediation: str = Field(default="", description="Suggested fix")
 
@@ -61,6 +66,15 @@ class SearchResponse(BaseModel):
     query: str
     results: list[SearchResultItem] = []
     total: int = 0
+
+
+class HistoryItem(BaseModel):
+    audit_id: str
+    file_name: str
+    vulnerability_type: str
+    severity: str
+    description: str
+    created_at: Optional[str] = None
 
 
 class HealthResponse(BaseModel):

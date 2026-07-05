@@ -2,6 +2,7 @@ import base64
 import json
 import logging
 import uuid
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
@@ -15,15 +16,28 @@ logger = logging.getLogger("cloudguard.agents")
 
 PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
+AUDITOR_MODEL = "llama-3.3-70b-versatile"
+VISION_MODEL = "gemini-2.5-flash"
+EMBEDDING_MODEL = "models/gemini-embedding-2"
+EMBEDDING_DIM = 768
 
+
+@lru_cache(maxsize=None)
 def _load_prompt(name: str) -> str:
     return (PROMPTS_DIR / name).read_text(encoding="utf-8")
+
+
+def _strip_code_fence(content: str) -> str:
+    content = content.strip()
+    if content.startswith("```"):
+        content = content.split("\n", 1)[1].rsplit("```", 1)[0]
+    return content
 
 
 def _get_groq_llm() -> ChatGroq:
     return ChatGroq(
         api_key=settings.groq_api_key,
-        model_name="llama-3.3-70b-versatile",
+        model=AUDITOR_MODEL,
         temperature=0.1,
         max_tokens=4096,
     )
@@ -32,7 +46,7 @@ def _get_groq_llm() -> ChatGroq:
 def _get_gemini_llm() -> ChatGoogleGenerativeAI:
     return ChatGoogleGenerativeAI(
         api_key=settings.gemini_api_key,
-        model="gemini-2.5-flash-preview-05-20",
+        model=VISION_MODEL,
         temperature=0.1,
     )
 
@@ -40,22 +54,20 @@ def _get_gemini_llm() -> ChatGoogleGenerativeAI:
 def _get_embedding_model() -> GoogleGenerativeAIEmbeddings:
     return GoogleGenerativeAIEmbeddings(
         google_api_key=settings.gemini_api_key,
-        model="models/gemini-embedding-2",
-        output_dimensionality=768,
+        model=EMBEDDING_MODEL,
+        output_dimensionality=EMBEDDING_DIM,
     )
 
 
 async def generate_embedding(text: str) -> list[float]:
     model = _get_embedding_model()
-    embedding = await model.aembed_query(text)
-    return embedding
+    return await model.aembed_query(text)
 
 
 async def run_security_audit(iac_content: str) -> list[dict]:
     logger.info("scanning IaC configuration (%d chars)", len(iac_content))
     llm = _get_groq_llm()
-    prompt_template = _load_prompt("security_rules.txt")
-    prompt = prompt_template.format(iac_content=iac_content)
+    prompt = _load_prompt("security_rules.txt").format(iac_content=iac_content)
 
     response = await llm.ainvoke(
         [
@@ -67,15 +79,11 @@ async def run_security_audit(iac_content: str) -> list[dict]:
     )
 
     try:
-        content = response.content.strip()
-        if content.startswith("```"):
-            content = content.split("\n", 1)[1].rsplit("```", 1)[0]
-        vulnerabilities = json.loads(content)
-        logger.info(
-            "found %d vulnerabilities",
-            len(vulnerabilities) if isinstance(vulnerabilities, list) else 0,
-        )
-        return vulnerabilities if isinstance(vulnerabilities, list) else []
+        vulnerabilities = json.loads(_strip_code_fence(response.content))
+        if not isinstance(vulnerabilities, list):
+            return []
+        logger.info("found %d vulnerabilities", len(vulnerabilities))
+        return vulnerabilities
     except (json.JSONDecodeError, IndexError) as e:
         logger.error("failed to parse auditor response: %s", e)
         return []
@@ -88,7 +96,6 @@ async def run_patch_generation(
 ) -> str:
     logger.info("generating patched code with %d RAG patches", len(similar_patches))
     llm = _get_groq_llm()
-    prompt_template = _load_prompt("patch_generator.txt")
 
     patches_context = "No historical data available."
     if similar_patches:
@@ -99,7 +106,7 @@ async def run_patch_generation(
             for p in similar_patches
         )
 
-    prompt = prompt_template.format(
+    prompt = _load_prompt("patch_generator.txt").format(
         iac_content=iac_content,
         vulnerabilities=json.dumps(vulnerabilities, indent=2),
         similar_patches=patches_context,
@@ -113,18 +120,12 @@ async def run_patch_generation(
             HumanMessage(content=prompt),
         ]
     )
-
-    content = response.content.strip()
-    if content.startswith("```"):
-        content = content.split("\n", 1)[1].rsplit("```", 1)[0]
-    return content
+    return _strip_code_fence(response.content)
 
 
 async def run_diagram_analysis(iac_content: str, image_bytes: bytes) -> str:
     llm = _get_gemini_llm()
-    prompt_template = _load_prompt("vision_audit.txt")
-    prompt_text = prompt_template.format(iac_content=iac_content)
-
+    prompt_text = _load_prompt("vision_audit.txt").format(iac_content=iac_content)
     image_b64 = base64.b64encode(image_bytes).decode("utf-8")
 
     response = await llm.ainvoke(
@@ -143,19 +144,59 @@ async def run_diagram_analysis(iac_content: str, image_bytes: bytes) -> str:
     return response.content
 
 
-async def calculate_security_score(vulnerabilities: list[dict]) -> int:
+def calculate_security_score(vulnerabilities: list[dict]) -> int:
     """Score from 100 down: CRITICAL=-25, HIGH=-15, MEDIUM=-8, LOW=-3."""
+    penalties = {"CRITICAL": 25, "HIGH": 15, "MEDIUM": 8, "LOW": 3}
     score = 100
-    severity_penalties = {
-        "CRITICAL": 25,
-        "HIGH": 15,
-        "MEDIUM": 8,
-        "LOW": 3,
-    }
     for vuln in vulnerabilities:
-        severity = vuln.get("severity", "LOW").upper()
-        score -= severity_penalties.get(severity, 3)
+        severity = str(vuln.get("severity", "LOW")).upper()
+        score -= penalties.get(severity, 3)
     return max(0, score)
+
+
+async def find_similar_patches(
+    db_service, vulnerabilities: list[dict], limit: int = 3
+) -> list[dict]:
+    """Look up past fixes for similar findings. Failures degrade to no context."""
+    if not (db_service and vulnerabilities):
+        return []
+    combined = " | ".join(v.get("description", "") for v in vulnerabilities)
+    try:
+        query_embedding = await generate_embedding(combined)
+        return await db_service.search_similar(query_embedding, limit=limit)
+    except Exception:
+        logger.warning("similar-patch lookup failed", exc_info=True)
+        return []
+
+
+async def persist_findings(
+    db_service,
+    audit_id: str,
+    file_name: str,
+    iac_content: str,
+    patched_code: str,
+    vulnerabilities: list[dict],
+) -> None:
+    """Embed and store each finding; one bad row shouldn't sink the rest."""
+    for vuln in vulnerabilities:
+        try:
+            description = vuln.get("description", "")
+            embedding = await generate_embedding(description)
+            await db_service.save_vulnerability(
+                audit_id=audit_id,
+                file_name=file_name,
+                vulnerability_type=vuln.get("title", "Unknown"),
+                severity=vuln.get("severity", "LOW"),
+                description=description,
+                resource=vuln.get("resource", ""),
+                original_code=iac_content[:2000],
+                patched_code=patched_code[:2000],
+                embedding=embedding,
+            )
+        except Exception:
+            logger.warning(
+                "failed to save finding for audit %s", audit_id, exc_info=True
+            )
 
 
 async def run_full_audit(
@@ -168,13 +209,9 @@ async def run_full_audit(
     logger.info("starting audit %s for %s", audit_id, file_name)
 
     vulnerabilities = await run_security_audit(iac_content)
-    security_score = await calculate_security_score(vulnerabilities)
+    security_score = calculate_security_score(vulnerabilities)
 
-    similar_patches = []
-    if db_service and vulnerabilities:
-        combined_desc = " | ".join(v.get("description", "") for v in vulnerabilities)
-        query_embedding = await generate_embedding(combined_desc)
-        similar_patches = await db_service.search_similar(query_embedding, limit=3)
+    similar_patches = await find_similar_patches(db_service, vulnerabilities)
 
     patched_code = ""
     if vulnerabilities:
@@ -187,20 +224,9 @@ async def run_full_audit(
         diagram_analysis = await run_diagram_analysis(iac_content, image_bytes)
 
     if db_service:
-        for vuln in vulnerabilities:
-            desc = vuln.get("description", "")
-            embedding = await generate_embedding(desc)
-            await db_service.save_vulnerability(
-                audit_id=audit_id,
-                file_name=file_name,
-                vulnerability_type=vuln.get("title", "Unknown"),
-                severity=vuln.get("severity", "LOW"),
-                description=desc,
-                resource=vuln.get("resource", ""),
-                original_code=iac_content[:2000],
-                patched_code=patched_code[:2000],
-                embedding=embedding,
-            )
+        await persist_findings(
+            db_service, audit_id, file_name, iac_content, patched_code, vulnerabilities
+        )
 
     return {
         "audit_id": audit_id,

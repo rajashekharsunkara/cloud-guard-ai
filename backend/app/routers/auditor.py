@@ -1,9 +1,12 @@
+import asyncio
 import json
 import logging
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.config import settings
@@ -12,13 +15,18 @@ from backend.app.schemas.auditor import (
     AuditRequest,
     AuditResult,
     HealthResponse,
+    HistoryItem,
     SearchRequest,
     SearchResponse,
     SearchResultItem,
 )
 from backend.app.services.agents import (
+    calculate_security_score,
+    find_similar_patches,
     generate_embedding,
+    persist_findings,
     run_full_audit,
+    run_patch_generation,
     run_security_audit,
 )
 from backend.app.services.db_service import DBService
@@ -26,6 +34,26 @@ from backend.app.services.storage import StorageService
 
 logger = logging.getLogger("cloudguard.auditor")
 router = APIRouter(prefix="/api", tags=["auditor"])
+
+ALLOWED_DIAGRAM_TYPES = {"image/png", "image/jpeg", "image/webp"}
+
+
+def _upload_audit_artifacts(iac_content: str, file_name: str, result: dict) -> None:
+    """Store the original and patched configs in S3. Best effort."""
+    try:
+        storage = StorageService()
+        original_key = storage.upload_file(
+            content=iac_content,
+            file_name=file_name,
+            unique_id=result["audit_id"],
+        )
+        if result.get("patched_code"):
+            storage.upload_patched_file(
+                original_key=original_key,
+                patched_content=result["patched_code"],
+            )
+    except Exception:
+        logger.exception("S3 upload failed for audit %s", result.get("audit_id"))
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -35,18 +63,16 @@ async def health_check(db: AsyncSession = Depends(get_db)):
     s3_status = "connected"
 
     try:
-        from sqlalchemy import text
-
         await db.execute(text("SELECT 1"))
     except Exception:
-        logger.exception("Health check database failure")
+        logger.exception("health check: database unreachable")
         db_status = "disconnected"
 
     try:
         storage = StorageService()
-        storage.client.head_bucket(Bucket=storage.bucket)
+        await asyncio.to_thread(storage.client.head_bucket, Bucket=storage.bucket)
     except Exception:
-        logger.exception("Health check S3 failure")
+        logger.exception("health check: s3 unreachable")
         s3_status = "disconnected"
 
     return HealthResponse(
@@ -66,29 +92,16 @@ async def audit_iac(
     request: AuditRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Run the full multi-agent audit pipeline on an IaC configuration."""
-    db_service = DBService(db)
-    storage = StorageService()
-
+    """Run the full audit pipeline on an IaC configuration."""
     result = await run_full_audit(
         iac_content=request.iac_content,
         file_name=request.file_name,
-        db_service=db_service,
+        db_service=DBService(db),
     )
 
-    try:
-        original_key = storage.upload_file(
-            content=request.iac_content,
-            file_name=request.file_name,
-            unique_id=result["audit_id"],
-        )
-        if result.get("patched_code"):
-            storage.upload_patched_file(
-                original_key=original_key,
-                patched_content=result["patched_code"],
-            )
-    except Exception:
-        logger.exception("S3 upload failed in API route")
+    await asyncio.to_thread(
+        _upload_audit_artifacts, request.iac_content, request.file_name, result
+    )
 
     return AuditResult(
         audit_id=result["audit_id"],
@@ -102,7 +115,7 @@ async def audit_iac(
     )
 
 
-@router.post("/audit/diagram")
+@router.post("/audit/diagram", response_model=AuditResult)
 async def audit_with_diagram(
     iac_content: str = Form(...),
     file_name: str = Form(default="main.tf"),
@@ -110,66 +123,29 @@ async def audit_with_diagram(
     db: AsyncSession = Depends(get_db),
 ):
     """Audit IaC with an architecture diagram for drift detection."""
-    allowed_types = {"image/png", "image/jpeg", "image/jpg", "image/webp"}
-    if diagram.content_type not in allowed_types:
+    if diagram.content_type not in ALLOWED_DIAGRAM_TYPES:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid image type: {diagram.content_type}. Allowed: {allowed_types}",
+            detail=f"Unsupported image type {diagram.content_type!r}; "
+            "use PNG, JPEG, or WebP",
         )
+    if len(iac_content) > settings.max_iac_chars:
+        raise HTTPException(status_code=413, detail="Configuration too large")
 
     image_bytes = await diagram.read()
-    db_service = DBService(db)
+    if len(image_bytes) > settings.max_diagram_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Diagram exceeds {settings.max_diagram_bytes // (1024 * 1024)} MB limit",
+        )
 
     result = await run_full_audit(
         iac_content=iac_content,
         file_name=file_name,
-        db_service=db_service,
+        db_service=DBService(db),
         image_bytes=image_bytes,
     )
-
-    return result
-
-
-async def _get_historical_patches(
-    db_service: DBService, vulnerabilities: list[dict]
-) -> list[dict]:
-    if not vulnerabilities:
-        return []
-    combined_desc = " | ".join(v.get("description", "") for v in vulnerabilities)
-    try:
-        query_embedding = await generate_embedding(combined_desc)
-        return await db_service.search_similar(query_embedding, limit=3)
-    except Exception:
-        return []
-
-
-async def _save_audit_vulnerabilities(
-    db_service: DBService,
-    audit_id: str,
-    file_name: str,
-    iac_content: str,
-    patched_code: str,
-    vulnerabilities: list[dict],
-) -> None:
-    for vuln in vulnerabilities:
-        try:
-            desc = vuln.get("description", "")
-            embedding = await generate_embedding(desc)
-            await db_service.save_vulnerability(
-                audit_id=audit_id,
-                file_name=file_name,
-                vulnerability_type=vuln.get("title", "Unknown"),
-                severity=vuln.get("severity", "LOW"),
-                description=desc,
-                resource=vuln.get("resource", ""),
-                original_code=iac_content[:2000],
-                patched_code=patched_code[:2000],
-                embedding=embedding,
-            )
-        except Exception:
-            logger.warning(
-                "failed to save vulnerability for audit %s", audit_id, exc_info=True
-            )
+    return AuditResult(**result)
 
 
 async def _stream_audit_events(
@@ -187,62 +163,65 @@ async def _stream_audit_events(
             payload["data"] = data
         return f"data: {json.dumps(payload)}\n\n"
 
-    yield send_event("security_scan", "running", "Scanning configuration...")
-    vulnerabilities = await run_security_audit(iac_content)
-    yield send_event(
-        "security_scan",
-        "complete",
-        f"Found {len(vulnerabilities)} vulnerabilities",
-        vulnerabilities,
-    )
-
-    yield send_event("rag_retrieval", "running", "Searching historical patches...")
-    similar_patches = await _get_historical_patches(db_service, vulnerabilities)
-    yield send_event(
-        "rag_retrieval",
-        "complete",
-        f"Retrieved {len(similar_patches)} similar past patches",
-    )
-
-    if vulnerabilities:
-        yield send_event("patch_generation", "running", "Generating secure code...")
-        from backend.app.services.agents import run_patch_generation
-
-        patched_code = await run_patch_generation(
-            iac_content, vulnerabilities, similar_patches
-        )
+    try:
+        yield send_event("security_scan", "running", "Scanning configuration...")
+        vulnerabilities = await run_security_audit(iac_content)
         yield send_event(
-            "patch_generation", "complete", "Patched code generated", patched_code
+            "security_scan",
+            "complete",
+            f"Found {len(vulnerabilities)} vulnerabilities",
+            vulnerabilities,
         )
-    else:
+
+        yield send_event("rag_retrieval", "running", "Searching historical patches...")
+        similar_patches = await find_similar_patches(db_service, vulnerabilities)
+        yield send_event(
+            "rag_retrieval",
+            "complete",
+            f"Retrieved {len(similar_patches)} similar past patches",
+        )
+
         patched_code = ""
+        if vulnerabilities:
+            yield send_event("patch_generation", "running", "Generating secure code...")
+            patched_code = await run_patch_generation(
+                iac_content, vulnerabilities, similar_patches
+            )
+            yield send_event(
+                "patch_generation", "complete", "Patched code generated", patched_code
+            )
 
-    from backend.app.services.agents import calculate_security_score
+        score = calculate_security_score(vulnerabilities)
+        yield send_event(
+            "scoring", "complete", f"Security Score: {score}/100", {"score": score}
+        )
 
-    score = await calculate_security_score(vulnerabilities)
-    yield send_event(
-        "scoring", "complete", f"Security Score: {score}/100", {"score": score}
-    )
+        yield send_event("storage", "running", "Storing results...")
+        audit_id = uuid.uuid4().hex[:12]
+        await persist_findings(
+            db_service, audit_id, file_name, iac_content, patched_code, vulnerabilities
+        )
+        await asyncio.to_thread(
+            _upload_audit_artifacts,
+            iac_content,
+            file_name,
+            {"audit_id": audit_id, "patched_code": patched_code},
+        )
+        yield send_event("storage", "complete", "Results persisted")
 
-    yield send_event("storage", "running", "Storing results...")
-    import uuid as _uuid
-
-    audit_id = _uuid.uuid4().hex[:12]
-    await _save_audit_vulnerabilities(
-        db_service, audit_id, file_name, iac_content, patched_code, vulnerabilities
-    )
-    yield send_event("storage", "complete", "Results persisted")
-
-    yield send_event(
-        "done",
-        "complete",
-        data={
-            "audit_id": audit_id,
-            "security_score": score,
-            "vulnerabilities": vulnerabilities,
-            "patched_code": patched_code,
-        },
-    )
+        yield send_event(
+            "done",
+            "complete",
+            data={
+                "audit_id": audit_id,
+                "security_score": score,
+                "vulnerabilities": vulnerabilities,
+                "patched_code": patched_code,
+            },
+        )
+    except Exception:
+        logger.exception("streaming audit failed")
+        yield send_event("error", "error", "Audit failed; check server logs")
 
 
 @router.post("/audit/stream")
@@ -268,30 +247,17 @@ async def search_audits(
     db: AsyncSession = Depends(get_db),
 ):
     """Semantic search over past audit findings using pgvector."""
-    db_service = DBService(db)
-
     query_embedding = await generate_embedding(request.query)
-    results = await db_service.search_similar(query_embedding, limit=request.limit)
+    results = await DBService(db).search_similar(query_embedding, limit=request.limit)
 
     return SearchResponse(
         query=request.query,
-        results=[
-            SearchResultItem(
-                audit_id=r["audit_id"],
-                file_name=r["file_name"],
-                vulnerability_type=r["vulnerability_type"],
-                description=r["description"],
-                patched_code=r["patched_code"],
-                similarity_score=r["similarity_score"],
-            )
-            for r in results
-        ],
+        results=[SearchResultItem(**r) for r in results],
         total=len(results),
     )
 
 
-@router.get("/history")
+@router.get("/history", response_model=list[HistoryItem])
 async def get_history(db: AsyncSession = Depends(get_db)):
     """Retrieve recent audit history."""
-    db_service = DBService(db)
-    return await db_service.get_audit_history()
+    return await DBService(db).get_audit_history()
