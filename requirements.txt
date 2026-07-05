@@ -1,32 +1,22 @@
 # Web framework
-fastapi>=0.115.0
-uvicorn[standard]>=0.34.0
-python-multipart>=0.0.18
-sse-starlette>=2.2.0
-jinja2>=3.1.0
+fastapi==0.139.0
+uvicorn[standard]==0.50.0
+python-multipart==0.0.32
 
 # Database
-sqlalchemy[asyncio]>=2.0.30
-asyncpg>=0.30.0
-pgvector>=0.3.0
-alembic>=1.15.0
+sqlalchemy[asyncio]==2.0.51
+asyncpg==0.31.0
+pgvector==0.4.2
 
 # AWS
-boto3>=1.35.0
+boto3==1.43.40
 
-# LLM
-langchain>=0.3.0
-langchain-groq>=0.3.0
-langchain-google-genai>=2.1.0
-google-generativeai>=0.8.0
+# LLM providers
+langchain-core==1.4.8
+langchain-groq==1.1.3
+langchain-google-genai==4.2.6
 
-# Utilities
-pydantic>=2.10.0
-pydantic-settings>=2.7.0
-python-dotenv>=1.0.0
-httpx>=0.28.0
-aiofiles>=24.1.0
-
-# Testing
-pytest>=8.0.0
-pytest-asyncio>=0.25.0
+# Config
+pydantic==2.13.4
+pydantic-settings==2.14.2
+python-dotenv==1.2.2
