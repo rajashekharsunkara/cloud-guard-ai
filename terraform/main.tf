@@ -3,7 +3,7 @@ resource "aws_s3_bucket" "artifacts" {
   force_destroy = true
 
   tags = {
-    Project     = "CloudGuard AI"
+    Project     = "CloudGuard"
     Environment = var.environment
     ManagedBy   = "Terraform"
   }
