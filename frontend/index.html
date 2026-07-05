@@ -3,271 +3,335 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="CloudGuard AI - IaC security scanner with multi-agent analysis, RAG patching, and architecture diagram validation.">
-  <title>CloudGuard AI</title>
+  <meta name="description" content="CloudGuard scans Terraform and Docker Compose configurations for security issues and generates patched versions.">
+  <title>CloudGuard</title>
   <link rel="stylesheet" href="/static/css/styles.css">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><path d='M50 10 L80 30 L80 60 C80 75 65 85 50 90 C35 85 20 75 20 60 L20 30 Z' fill='%234f8ff7'/></svg>">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><path d='M50 10 L80 30 L80 60 C80 75 65 85 50 90 C35 85 20 75 20 60 L20 30 Z' fill='%232563eb'/></svg>">
+  <script>
+    // Apply the saved theme before first paint to avoid a flash.
+    (function () {
+      var saved = localStorage.getItem("cg-theme");
+      var dark = saved ? saved === "dark"
+        : window.matchMedia("(prefers-color-scheme: dark)").matches;
+      if (dark) document.documentElement.setAttribute("data-theme", "dark");
+    })();
+  </script>
 </head>
 <body>
-  <div class="app-container">
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z"/></symbol>
+      <symbol id="i-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></symbol>
+      <symbol id="i-scan" viewBox="0 0 24 24"><path d="M4 8V6a2 2 0 012-2h2M16 4h2a2 2 0 012 2v2M20 16v2a2 2 0 01-2 2h-2M8 20H6a2 2 0 01-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></symbol>
+      <symbol id="i-image" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><circle cx="9" cy="10" r="1.5"/><path d="M4 17l5-4 3 2.5L16 12l4 4"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><line x1="20" y1="20" x2="15.5" y2="15.5"/></symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l2.5 2.5"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 10.6 4"/><path d="M20 5v6h-6"/></symbol>
+      <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5-11-6.5z"/></symbol>
+      <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3L5 13.5h5.5L10 21l8-10.5h-5.5L13 3z"/></symbol>
+      <symbol id="i-doc" viewBox="0 0 24 24"><path d="M7 3h7l4 4v14H7V3z"/><path d="M14 3v4h4"/></symbol>
+      <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V5M7.5 9.5L12 5l4.5 4.5"/><path d="M5 19h14"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4L2.8 20h18.4L12 4z"/><line x1="12" y1="10" x2="12" y2="14"/><line x1="12" y1="17" x2="12" y2="17.01"/></symbol>
+      <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><line x1="12" y1="11" x2="12" y2="16"/><line x1="12" y1="8" x2="12" y2="8.01"/></symbol>
+      <symbol id="i-menu" viewBox="0 0 24 24"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M3 12h2M19 12h2M4.6 19.4L6 18M18 6l1.4-1.4"/></symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 13.5A8 8 0 0110.5 4 8 8 0 1020 13.5z"/></symbol>
+      <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M4 13l2.5-7h11L20 13v6H4v-6z"/><path d="M4 13h5a3 3 0 006 0h5"/></symbol>
+    </defs>
+  </svg>
 
+  <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+  <div class="scrim" id="scrim"></div>
+
+  <header class="topbar">
+    <button class="menu-btn" id="menu-btn" aria-label="Open navigation">
+      <svg class="icon"><use href="#i-menu"/></svg>
+    </button>
+    <span class="topbar-title" id="topbar-title">Overview</span>
+  </header>
+
+  <div class="app">
     <aside class="sidebar" id="sidebar">
-      <div class="sidebar-logo">
-        <div class="logo-icon">CG</div>
+      <div class="brand">
+        <div class="brand-mark">
+          <svg class="icon"><use href="#i-shield"/></svg>
+        </div>
         <div>
-          <h1>CloudGuard AI</h1>
-          <span class="version">v1.0.0</span>
+          <h1>CloudGuard</h1>
+          <span class="brand-sub">IaC security auditing</span>
         </div>
       </div>
 
-      <div class="nav-section">
-        <div class="nav-section-title">Main</div>
-        <div class="nav-item active" data-tab="dashboard" id="nav-dashboard">
-          <span>Dashboard</span>
-        </div>
-        <div class="nav-item" data-tab="scanner" id="nav-scanner">
-          <span>Scanner</span>
-        </div>
-        <div class="nav-item" data-tab="diagram" id="nav-diagram">
-          <span>Diagram Validator</span>
-        </div>
-        <div class="nav-item" data-tab="search" id="nav-search">
-          <span>Semantic Search</span>
-        </div>
-      </div>
+      <nav class="nav-group" aria-label="Main">
+        <div class="nav-label">Workspace</div>
+        <button class="nav-item active" data-tab="dashboard" data-title="Overview">
+          <svg class="icon"><use href="#i-grid"/></svg><span>Overview</span>
+        </button>
+        <button class="nav-item" data-tab="scanner" data-title="Scanner">
+          <svg class="icon"><use href="#i-scan"/></svg><span>Scanner</span>
+        </button>
+        <button class="nav-item" data-tab="diagram" data-title="Diagram Check">
+          <svg class="icon"><use href="#i-image"/></svg><span>Diagram Check</span>
+        </button>
+        <button class="nav-item" data-tab="search" data-title="Search">
+          <svg class="icon"><use href="#i-search"/></svg><span>Search</span>
+        </button>
+        <button class="nav-item" data-tab="history" data-title="History">
+          <svg class="icon"><use href="#i-clock"/></svg><span>History</span>
+        </button>
+      </nav>
 
-      <div class="nav-section">
-        <div class="nav-section-title">System</div>
-        <div class="nav-item" data-tab="history" id="nav-history">
-          <span>Audit History</span>
+      <div class="sidebar-foot">
+        <div class="service-status" id="service-status">
+          <div class="status-row">
+            <span>API</span>
+            <span class="status-value"><span class="status-dot" id="dot-api"></span><span id="txt-api">Checking</span></span>
+          </div>
+          <div class="status-row">
+            <span>Database</span>
+            <span class="status-value"><span class="status-dot" id="dot-db"></span><span id="txt-db">Checking</span></span>
+          </div>
+          <div class="status-row">
+            <span>Storage</span>
+            <span class="status-value"><span class="status-dot" id="dot-s3"></span><span id="txt-s3">Checking</span></span>
+          </div>
         </div>
-      </div>
-
-      <div class="sidebar-status" id="system-status">
-        <div class="status-row">
-          <span class="label">FastAPI</span>
-          <span><span class="status-dot" id="status-api"></span><span id="status-api-text">...</span></span>
-        </div>
-        <div class="status-row">
-          <span class="label">PostgreSQL</span>
-          <span><span class="status-dot" id="status-db"></span><span id="status-db-text">...</span></span>
-        </div>
-        <div class="status-row">
-          <span class="label">S3 Storage</span>
-          <span><span class="status-dot" id="status-s3"></span><span id="status-s3-text">...</span></span>
-        </div>
+        <button class="theme-toggle" id="theme-toggle">
+          <svg class="icon icon-moon"><use href="#i-moon"/></svg>
+          <svg class="icon icon-sun"><use href="#i-sun"/></svg>
+          <span id="theme-label">Dark mode</span>
+        </button>
       </div>
     </aside>
 
-    <main class="main-content">
+    <main class="main">
 
-      <!-- Dashboard -->
-      <div class="tab-view active" id="tab-dashboard">
-        <div class="page-header">
+      <!-- Overview -->
+      <section class="page active" id="page-dashboard">
+        <div class="page-head">
           <div>
-            <h2>Dashboard</h2>
-            <p class="subtitle">System overview and session metrics</p>
+            <h2>Overview</h2>
+            <p class="lede">Scan activity and service health at a glance</p>
           </div>
-          <button class="btn btn-ghost" onclick="checkHealth()">Refresh</button>
+          <button class="btn btn-secondary" id="btn-refresh-dash">
+            <svg class="icon"><use href="#i-refresh"/></svg>Refresh
+          </button>
         </div>
 
-        <div class="metrics-grid">
-          <div class="metric-card">
-            <div class="metric-value" id="metric-scans">0</div>
-            <div class="metric-label">Total Scans</div>
+        <div class="metrics">
+          <div class="metric">
+            <div class="metric-icon"><svg class="icon"><use href="#i-scan"/></svg></div>
+            <div>
+              <div class="metric-value" id="m-scans">0</div>
+              <div class="metric-label">Scans this session</div>
+            </div>
           </div>
-          <div class="metric-card">
-            <div class="metric-value" id="metric-vulns">0</div>
-            <div class="metric-label">Vulnerabilities</div>
+          <div class="metric">
+            <div class="metric-icon danger"><svg class="icon"><use href="#i-alert"/></svg></div>
+            <div>
+              <div class="metric-value" id="m-vulns">0</div>
+              <div class="metric-label">Findings</div>
+            </div>
           </div>
-          <div class="metric-card">
-            <div class="metric-value" id="metric-patches">0</div>
-            <div class="metric-label">Patches Generated</div>
+          <div class="metric">
+            <div class="metric-icon ok"><svg class="icon"><use href="#i-check"/></svg></div>
+            <div>
+              <div class="metric-value" id="m-patches">0</div>
+              <div class="metric-label">Patches generated</div>
+            </div>
           </div>
-          <div class="metric-card">
-            <div class="metric-value" id="metric-rag">0</div>
-            <div class="metric-label">RAG Retrievals</div>
+          <div class="metric">
+            <div class="metric-icon warn"><svg class="icon"><use href="#i-bolt"/></svg></div>
+            <div>
+              <div class="metric-value" id="m-rag">0</div>
+              <div class="metric-label">Historical matches</div>
+            </div>
           </div>
         </div>
 
-        <div class="glass-panel">
-          <div class="panel-header">
-            <h3>Recent Activity</h3>
+        <div class="panel">
+          <div class="panel-head">
+            <h3>Recent findings</h3>
+            <span class="meta" id="activity-meta"></span>
           </div>
           <div id="recent-activity">
-            <div class="empty-state">
-              <h3>No activity yet</h3>
-              <p>Run a scan from the Scanner tab to see results here.</p>
-            </div>
+            <div class="loading"><div class="spinner"></div></div>
           </div>
         </div>
-      </div>
+      </section>
 
       <!-- Scanner -->
-      <div class="tab-view" id="tab-scanner">
-        <div class="page-header">
+      <section class="page" id="page-scanner">
+        <div class="page-head">
           <div>
-            <h2>IaC Security Scanner</h2>
-            <p class="subtitle">Paste Terraform or Docker Compose configs to scan for vulnerabilities</p>
+            <h2>Scanner</h2>
+            <p class="lede">Paste a Terraform or Docker Compose configuration to audit it</p>
           </div>
         </div>
 
-        <div class="glass-panel">
-          <div class="panel-header">
+        <div class="panel">
+          <div class="panel-head">
             <h3>Configuration</h3>
-            <div style="display: flex; gap: 8px; align-items: center;">
-              <label for="file-name-input" style="font-size: 0.72rem; color: var(--text-muted);">Filename:</label>
-              <input type="text" id="file-name-input" value="main.tf"
-                style="background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; color: var(--text); font-family: var(--font-mono); font-size: 0.78rem; width: 130px;">
+            <div class="field-inline">
+              <label for="file-name-input">Filename</label>
+              <input type="text" id="file-name-input" class="text-input" value="main.tf" style="width: 132px;">
             </div>
           </div>
 
-          <textarea class="iac-textarea" id="iac-input" placeholder='# Paste your IaC configuration here...
-
-resource "aws_s3_bucket" "data" {
+          <textarea class="code-editor" id="iac-input" spellcheck="false" placeholder='resource "aws_s3_bucket" "data" {
   bucket = "my-data-bucket"
   acl    = "public-read"
 }'></textarea>
 
-          <div style="display: flex; gap: 10px; margin-top: 14px;">
-            <button class="btn btn-primary" id="btn-scan" onclick="startScan()">Run Audit</button>
-            <button class="btn btn-ghost" id="btn-scan-stream" onclick="startStreamScan()">Stream (SSE)</button>
-            <button class="btn btn-ghost" onclick="loadSampleTerraform()">Load Sample</button>
+          <div class="btn-row">
+            <button class="btn btn-primary" id="btn-scan">
+              <svg class="icon"><use href="#i-play"/></svg>Run audit
+            </button>
+            <button class="btn btn-secondary" id="btn-scan-stream">
+              <svg class="icon"><use href="#i-bolt"/></svg>Run with live progress
+            </button>
+            <button class="btn btn-secondary" id="btn-sample">
+              <svg class="icon"><use href="#i-doc"/></svg>Load sample
+            </button>
           </div>
         </div>
 
-        <div class="glass-panel" id="sse-timeline-panel" style="display: none;">
-          <div class="panel-header">
-            <h3>Pipeline Progress</h3>
-          </div>
-          <div class="timeline" id="sse-timeline"></div>
+        <div class="panel" id="pipeline-panel" hidden>
+          <div class="panel-head"><h3>Pipeline</h3></div>
+          <div class="steps" id="pipeline-steps"></div>
         </div>
 
-        <div id="scan-results" style="display: none;">
-          <div class="glass-panel" style="text-align: center;">
-            <h3 style="margin-bottom: 6px;">Security Score</h3>
-            <div class="score-gauge" id="score-gauge">
+        <div id="scan-results" hidden>
+          <div class="panel score-panel">
+            <div class="gauge">
               <svg viewBox="0 0 120 120">
                 <circle class="track" cx="60" cy="60" r="52"></circle>
                 <circle class="fill" id="score-circle" cx="60" cy="60" r="52"
                   stroke-dasharray="326.7" stroke-dashoffset="326.7"></circle>
               </svg>
-              <div class="score-text">
-                <div class="score-value" id="score-display">0</div>
-                <div class="score-label">out of 100</div>
+              <div class="gauge-text">
+                <div class="gauge-value" id="score-display">0</div>
+                <div class="gauge-label">Score</div>
               </div>
+            </div>
+            <div class="score-summary">
+              <h3 id="score-headline">Security score</h3>
+              <p id="score-note"></p>
+              <div class="severity-tally" id="severity-tally"></div>
             </div>
           </div>
 
-          <div class="glass-panel">
-            <div class="panel-header">
-              <h3>Vulnerabilities</h3>
-              <span id="vuln-count" style="font-size: 0.75rem; color: var(--text-muted);"></span>
+          <div class="panel">
+            <div class="panel-head">
+              <h3>Findings</h3>
+              <span class="meta" id="vuln-count"></span>
             </div>
-            <div class="vuln-list" id="vuln-list"></div>
+            <div class="finding-list" id="vuln-list"></div>
           </div>
 
-          <div class="glass-panel">
-            <div class="panel-header">
-              <h3>Code Comparison</h3>
-            </div>
-            <div class="code-container">
+          <div class="panel">
+            <div class="panel-head"><h3>Suggested patch</h3></div>
+            <div class="code-compare">
               <div class="code-pane">
-                <div class="code-pane-header">
-                  Original <span class="tag original">Vulnerable</span>
+                <div class="code-pane-head">
+                  <span>Original</span><span class="badge critical">Vulnerable</span>
                 </div>
-                <pre class="code-content" id="code-original"></pre>
+                <pre class="code-block" id="code-original"></pre>
               </div>
               <div class="code-pane">
-                <div class="code-pane-header">
-                  Patched <span class="tag patched">Secure</span>
+                <div class="code-pane-head">
+                  <span>Patched</span><span class="badge low">Hardened</span>
                 </div>
-                <pre class="code-content" id="code-patched"></pre>
+                <pre class="code-block" id="code-patched"></pre>
               </div>
             </div>
           </div>
         </div>
-      </div>
+      </section>
 
-      <!-- Diagram Validator -->
-      <div class="tab-view" id="tab-diagram">
-        <div class="page-header">
+      <!-- Diagram Check -->
+      <section class="page" id="page-diagram">
+        <div class="page-head">
           <div>
-            <h2>Diagram Validator</h2>
-            <p class="subtitle">Upload a cloud architecture diagram to compare against your Terraform code</p>
+            <h2>Diagram Check</h2>
+            <p class="lede">Compare an architecture diagram against the Terraform that should implement it</p>
           </div>
         </div>
 
-        <div class="glass-panel">
-          <div class="panel-header"><h3>Terraform Configuration</h3></div>
-          <textarea class="iac-textarea" id="diagram-iac-input" placeholder="# Paste Terraform code to validate against diagram..."></textarea>
+        <div class="panel">
+          <div class="panel-head"><h3>Terraform configuration</h3></div>
+          <textarea class="code-editor" id="diagram-iac-input" spellcheck="false" placeholder="Paste the Terraform for the environment shown in your diagram"></textarea>
         </div>
 
-        <div class="glass-panel">
-          <div class="panel-header"><h3>Architecture Diagram</h3></div>
-          <div class="upload-zone" id="diagram-upload-zone">
-            <div class="upload-title">Drop your diagram here</div>
-            <div class="upload-subtitle">PNG, JPG, or WEBP</div>
+        <div class="panel">
+          <div class="panel-head"><h3>Architecture diagram</h3></div>
+          <div class="dropzone" id="diagram-dropzone">
+            <svg class="icon"><use href="#i-upload"/></svg>
+            <div class="dropzone-title">Drop an image or click to browse</div>
+            <div class="dropzone-sub">PNG, JPEG, or WebP · up to 8 MB</div>
             <input type="file" id="diagram-file-input" accept="image/png,image/jpeg,image/webp">
           </div>
-          <div class="diagram-preview" id="diagram-preview" style="display: none;">
-            <img id="diagram-preview-img" alt="Diagram preview">
+          <div class="preview" id="diagram-preview" hidden>
+            <img id="diagram-preview-img" alt="Selected architecture diagram">
           </div>
         </div>
 
-        <button class="btn btn-primary" id="btn-diagram-audit" onclick="startDiagramAudit()" disabled>
-          Validate Diagram
+        <button class="btn btn-primary" id="btn-diagram-audit" disabled>
+          <svg class="icon"><use href="#i-play"/></svg>Compare
         </button>
 
-        <div class="glass-panel" id="diagram-results" style="display: none; margin-top: 20px;">
-          <div class="panel-header"><h3>Drift Analysis</h3></div>
-          <div id="diagram-analysis-content" class="code-content" style="white-space: pre-wrap;"></div>
+        <div class="panel" id="diagram-results" hidden style="margin-top: 16px;">
+          <div class="panel-head"><h3>Drift report</h3></div>
+          <div id="diagram-analysis-content" class="code-block"></div>
         </div>
-      </div>
+      </section>
 
-      <!-- Semantic Search -->
-      <div class="tab-view" id="tab-search">
-        <div class="page-header">
+      <!-- Search -->
+      <section class="page" id="page-search">
+        <div class="page-head">
           <div>
-            <h2>Semantic Search</h2>
-            <p class="subtitle">Search past audit findings using natural language queries</p>
+            <h2>Search</h2>
+            <p class="lede">Find past findings by meaning, not keywords</p>
           </div>
         </div>
 
-        <div class="glass-panel">
+        <div class="panel">
           <div class="search-bar">
-            <input type="text" id="search-input" placeholder='e.g. "publicly exposed S3 bucket"'>
-            <button class="btn btn-primary" onclick="semanticSearch()" style="padding: 6px 14px;">Search</button>
+            <svg class="icon"><use href="#i-search"/></svg>
+            <input type="text" id="search-input" placeholder="Try &quot;publicly exposed S3 bucket&quot;">
+            <button class="btn btn-primary" id="btn-search">Search</button>
           </div>
 
-          <div id="search-results-container">
-            <div class="empty-state">
-              <h3>Vector-powered search</h3>
-              <p>Query past audit findings by description. Results are ranked by cosine similarity.</p>
+          <div id="search-results">
+            <div class="empty">
+              <svg class="icon"><use href="#i-search"/></svg>
+              <h3>Search previous audits</h3>
+              <p>Results are matched by embedding similarity, so related findings surface even when the wording differs.</p>
             </div>
           </div>
         </div>
-      </div>
+      </section>
 
-      <!-- Audit History -->
-      <div class="tab-view" id="tab-history">
-        <div class="page-header">
+      <!-- History -->
+      <section class="page" id="page-history">
+        <div class="page-head">
           <div>
-            <h2>Audit History</h2>
-            <p class="subtitle">Previous scan results from PostgreSQL</p>
+            <h2>History</h2>
+            <p class="lede">Findings from previous scans</p>
           </div>
-          <button class="btn btn-ghost" onclick="loadHistory()">Refresh</button>
+          <button class="btn btn-secondary" id="btn-refresh-history">
+            <svg class="icon"><use href="#i-refresh"/></svg>Refresh
+          </button>
         </div>
 
-        <div class="glass-panel">
+        <div class="panel">
           <div id="history-list">
-            <div class="empty-state">
-              <h3>No audit history</h3>
-              <p>Run your first scan to populate this view.</p>
-            </div>
+            <div class="loading"><div class="spinner"></div></div>
           </div>
         </div>
-      </div>
+      </section>
 
     </main>
   </div>

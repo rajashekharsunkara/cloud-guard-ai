@@ -1,59 +1,183 @@
-const API_BASE = window.location.origin + '/api';
+"use strict";
 
-const metrics = { scans: 0, vulns: 0, patches: 0, ragRetrievals: 0 };
+const API = window.location.origin + "/api";
 
-// Tab navigation
+const $ = (id) => document.getElementById(id);
 
-document.querySelectorAll('.nav-item[data-tab]').forEach((item) => {
-  item.addEventListener('click', () => {
-    document.querySelectorAll('.nav-item').forEach((n) => n.classList.remove('active'));
-    item.classList.add('active');
+const session = { scans: 0, vulns: 0, patches: 0, ragMatches: 0 };
 
-    const tabId = 'tab-' + item.dataset.tab;
-    document.querySelectorAll('.tab-view').forEach((t) => t.classList.remove('active'));
-    const target = document.getElementById(tabId);
-    if (target) target.classList.add('active');
-  });
+/* ---------- Utilities ---------- */
+
+function escapeHtml(text) {
+  const div = document.createElement("div");
+  div.textContent = text == null ? "" : String(text);
+  return div.innerHTML;
+}
+
+function icon(name, cls = "icon") {
+  return `<svg class="${cls}"><use href="#i-${name}"/></svg>`;
+}
+
+function relativeTime(iso) {
+  if (!iso) return "";
+  const then = new Date(iso.endsWith("Z") || iso.includes("+") ? iso : iso + "Z");
+  const s = Math.round((Date.now() - then.getTime()) / 1000);
+  if (Number.isNaN(s)) return "";
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  if (s < 604800) return `${Math.floor(s / 86400)}d ago`;
+  return then.toLocaleDateString();
+}
+
+function severityClass(sev) {
+  const s = (sev || "low").toLowerCase();
+  return ["critical", "high", "medium", "low"].includes(s) ? s : "low";
+}
+
+/* ---------- Toasts ---------- */
+
+function toast(message, kind = "info", timeout = 4500) {
+  const el = document.createElement("div");
+  el.className = `toast ${kind}`;
+  const glyph = kind === "ok" ? "check" : kind === "error" ? "alert" : "info";
+  el.innerHTML = `${icon(glyph)}<span>${escapeHtml(message)}</span>`;
+  $("toasts").appendChild(el);
+  setTimeout(() => {
+    el.classList.add("leaving");
+    el.addEventListener("animationend", () => el.remove(), { once: true });
+  }, timeout);
+}
+
+/* ---------- Theme ---------- */
+
+function applyTheme(dark) {
+  if (dark) document.documentElement.setAttribute("data-theme", "dark");
+  else document.documentElement.removeAttribute("data-theme");
+  $("theme-label").textContent = dark ? "Light mode" : "Dark mode";
+}
+
+$("theme-toggle").addEventListener("click", () => {
+  const dark = !document.documentElement.hasAttribute("data-theme");
+  localStorage.setItem("cg-theme", dark ? "dark" : "light");
+  applyTheme(dark);
 });
 
-// Health check
+applyTheme(document.documentElement.getAttribute("data-theme") === "dark");
+
+/* ---------- Navigation ---------- */
+
+const historyState = { loaded: false };
+
+function openTab(name) {
+  document.querySelectorAll(".nav-item").forEach((n) => {
+    n.classList.toggle("active", n.dataset.tab === name);
+    if (n.dataset.tab === name) {
+      $("topbar-title").textContent = n.dataset.title;
+    }
+  });
+  document.querySelectorAll(".page").forEach((p) => {
+    p.classList.toggle("active", p.id === "page-" + name);
+  });
+  closeNav();
+  if (name === "history" && !historyState.loaded) loadHistory();
+}
+
+document.querySelectorAll(".nav-item[data-tab]").forEach((item) => {
+  item.addEventListener("click", () => openTab(item.dataset.tab));
+});
+
+function closeNav() {
+  document.body.classList.remove("nav-open");
+}
+
+$("menu-btn").addEventListener("click", () => {
+  document.body.classList.toggle("nav-open");
+});
+
+$("scrim").addEventListener("click", closeNav);
+
+/* ---------- Health ---------- */
+
+function setStatus(dotId, txtId, ok, label) {
+  $(dotId).className = "status-dot " + (ok ? "online" : "offline");
+  $(txtId).textContent = label;
+}
 
 async function checkHealth() {
-  const apiDot = document.getElementById('status-api');
-  const apiText = document.getElementById('status-api-text');
-  const dbDot = document.getElementById('status-db');
-  const dbText = document.getElementById('status-db-text');
-  const s3Dot = document.getElementById('status-s3');
-  const s3Text = document.getElementById('status-s3-text');
-
   try {
-    const res = await fetch(`${API_BASE}/health`);
+    const res = await fetch(`${API}/health`);
     const data = await res.json();
-
-    apiDot.className = 'status-dot online';
-    apiText.textContent = 'Online';
-
-    dbDot.className = data.database === 'connected' ? 'status-dot online' : 'status-dot offline';
-    dbText.textContent = data.database === 'connected' ? 'Online' : 'Offline';
-
-    s3Dot.className = data.s3 === 'connected' ? 'status-dot online' : 'status-dot offline';
-    s3Text.textContent = data.s3 === 'connected' ? 'Online' : 'Offline';
-  } catch (err) {
-    apiDot.className = 'status-dot offline';
-    apiText.textContent = 'Offline';
-    dbDot.className = 'status-dot offline';
-    dbText.textContent = 'Unknown';
-    s3Dot.className = 'status-dot offline';
-    s3Text.textContent = 'Unknown';
+    setStatus("dot-api", "txt-api", true, "Online");
+    setStatus("dot-db", "txt-db", data.database === "connected",
+      data.database === "connected" ? "Online" : "Offline");
+    setStatus("dot-s3", "txt-s3", data.s3 === "connected",
+      data.s3 === "connected" ? "Online" : "Offline");
+  } catch {
+    setStatus("dot-api", "txt-api", false, "Offline");
+    setStatus("dot-db", "txt-db", false, "Unknown");
+    setStatus("dot-s3", "txt-s3", false, "Unknown");
   }
 }
 
-checkHealth();
+/* ---------- Dashboard ---------- */
 
-// Sample terraform
+function updateMetrics() {
+  $("m-scans").textContent = session.scans;
+  $("m-vulns").textContent = session.vulns;
+  $("m-patches").textContent = session.patches;
+  $("m-rag").textContent = session.ragMatches;
+}
 
-function loadSampleTerraform() {
-  document.getElementById('iac-input').value = `resource "aws_s3_bucket" "data_lake" {
+async function loadRecentActivity() {
+  const container = $("recent-activity");
+  try {
+    const res = await fetch(`${API}/history`);
+    if (!res.ok) throw new Error();
+    const rows = await res.json();
+
+    if (rows.length === 0) {
+      container.innerHTML = `
+        <div class="empty">
+          ${icon("inbox")}
+          <h3>Nothing here yet</h3>
+          <p>Run a scan and its findings will show up here.</p>
+        </div>`;
+      $("activity-meta").textContent = "";
+      return;
+    }
+
+    $("activity-meta").textContent = `Last ${Math.min(rows.length, 8)} findings`;
+    container.innerHTML = `
+      <div class="activity-list">
+        ${rows.slice(0, 8).map((r) => `
+          <div class="activity">
+            <div class="activity-icon">${icon("alert")}</div>
+            <div class="activity-body">
+              <div class="activity-title">${escapeHtml(r.vulnerability_type)}</div>
+              <div class="activity-sub">${escapeHtml(r.file_name)} · <span class="badge ${severityClass(r.severity)}">${escapeHtml(r.severity)}</span></div>
+            </div>
+            <span class="activity-time">${relativeTime(r.created_at)}</span>
+          </div>`).join("")}
+      </div>`;
+  } catch {
+    container.innerHTML = `
+      <div class="empty">
+        ${icon("alert")}
+        <h3>Couldn't load activity</h3>
+        <p>The API isn't reachable right now.</p>
+      </div>`;
+  }
+}
+
+$("btn-refresh-dash").addEventListener("click", () => {
+  checkHealth();
+  loadRecentActivity();
+});
+
+/* ---------- Scanner ---------- */
+
+const SAMPLE_TF = `resource "aws_s3_bucket" "data_lake" {
   bucket = "company-data-lake-prod"
   acl    = "public-read-write"
 }
@@ -98,413 +222,414 @@ resource "aws_instance" "web_server" {
     Name = "production-web"
   }
 }`;
+
+$("btn-sample").addEventListener("click", () => {
+  $("iac-input").value = SAMPLE_TF;
+  $("iac-input").focus();
+});
+
+function readScanInput() {
+  const iacContent = $("iac-input").value.trim();
+  const fileName = $("file-name-input").value.trim() || "main.tf";
+  if (iacContent.length < 10) {
+    toast("Paste a configuration first — at least 10 characters.", "error");
+    return null;
+  }
+  return { iacContent, fileName };
 }
 
-// Standard audit
+function setBusy(btn, busy, label) {
+  btn.disabled = busy;
+  btn.innerHTML = busy
+    ? `<span class="spinner sm"></span>${escapeHtml(label)}`
+    : btn.dataset.idle;
+}
 
-async function startScan() {
-  const iacContent = document.getElementById('iac-input').value.trim();
-  const fileName = document.getElementById('file-name-input').value.trim() || 'main.tf';
+// Remember idle button markup so setBusy can restore it.
+["btn-scan", "btn-scan-stream", "btn-diagram-audit"].forEach((id) => {
+  $(id).dataset.idle = $(id).innerHTML;
+});
 
-  if (!iacContent || iacContent.length < 10) {
-    alert('Please paste a valid IaC configuration (at least 10 characters).');
-    return;
-  }
+function recordScan(result) {
+  session.scans++;
+  session.vulns += (result.vulnerabilities || []).length;
+  if (result.patched_code) session.patches++;
+  if ((result.similar_past_audits || []).length > 0) session.ragMatches++;
+  updateMetrics();
+  loadRecentActivity();
+}
 
-  const btn = document.getElementById('btn-scan');
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px;margin:0;"></span> Scanning...';
+$("btn-scan").addEventListener("click", async () => {
+  const input = readScanInput();
+  if (!input) return;
 
-  document.getElementById('scan-results').style.display = 'none';
-  document.getElementById('sse-timeline-panel').style.display = 'none';
+  const btn = $("btn-scan");
+  setBusy(btn, true, "Scanning…");
+  $("scan-results").hidden = true;
+  $("pipeline-panel").hidden = true;
 
   try {
-    const res = await fetch(`${API_BASE}/audit`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ iac_content: iacContent, file_name: fileName }),
+    const res = await fetch(`${API}/audit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ iac_content: input.iacContent, file_name: input.fileName }),
     });
 
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || 'Audit failed');
+      const err = await res.json().catch(() => ({}));
+      throw new Error(typeof err.detail === "string" ? err.detail : "Audit failed");
     }
 
     const result = await res.json();
-    displayResults(result, iacContent);
-
-    metrics.scans++;
-    metrics.vulns += result.vulnerabilities.length;
-    if (result.patched_code) metrics.patches++;
-    if (result.similar_past_audits && result.similar_past_audits.length > 0) metrics.ragRetrievals++;
-    updateMetrics();
+    displayResults(result, input.iacContent);
+    recordScan(result);
   } catch (err) {
-    alert('Error: ' + err.message);
+    toast(err.message, "error");
   } finally {
-    btn.disabled = false;
-    btn.innerHTML = 'Run Audit';
+    setBusy(btn, false);
   }
+});
+
+/* ---------- Streaming scan ---------- */
+
+const STEP_LABELS = {
+  security_scan: "Security scan",
+  rag_retrieval: "Historical patch lookup",
+  patch_generation: "Patch generation",
+  scoring: "Scoring",
+  storage: "Persistence",
+};
+
+function renderStep(stepId, status, note) {
+  const container = $("pipeline-steps");
+  let row = container.querySelector(`[data-step="${stepId}"]`);
+  if (!row) {
+    row = document.createElement("div");
+    row.dataset.step = stepId;
+    row.innerHTML = `
+      <div class="step-dot">${icon(status === "error" ? "x" : "check")}</div>
+      <div>
+        <div class="step-msg">${escapeHtml(STEP_LABELS[stepId] || stepId)}</div>
+        <div class="step-note"></div>
+      </div>`;
+    container.appendChild(row);
+  }
+  row.className = `step ${status}`;
+  if (note) row.querySelector(".step-note").textContent = note;
 }
 
-// SSE streaming audit
+$("btn-scan-stream").addEventListener("click", async () => {
+  const input = readScanInput();
+  if (!input) return;
 
-async function startStreamScan() {
-  const iacContent = document.getElementById('iac-input').value.trim();
-  const fileName = document.getElementById('file-name-input').value.trim() || 'main.tf';
-
-  if (!iacContent || iacContent.length < 10) {
-    alert('Please paste a valid IaC configuration (at least 10 characters).');
-    return;
-  }
-
-  const btn = document.getElementById('btn-scan-stream');
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px;margin:0;"></span> Streaming...';
-
-  const timelinePanel = document.getElementById('sse-timeline-panel');
-  const timeline = document.getElementById('sse-timeline');
-  timelinePanel.style.display = 'block';
-  timeline.innerHTML = '';
-  document.getElementById('scan-results').style.display = 'none';
+  const btn = $("btn-scan-stream");
+  setBusy(btn, true, "Running…");
+  $("pipeline-panel").hidden = false;
+  $("pipeline-steps").innerHTML = "";
+  $("scan-results").hidden = true;
 
   try {
-    const res = await fetch(`${API_BASE}/audit/stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ iac_content: iacContent, file_name: fileName }),
+    const res = await fetch(`${API}/audit/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ iac_content: input.iacContent, file_name: input.fileName }),
     });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(typeof err.detail === "string" ? err.detail : "Audit failed");
+    }
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
-    let buffer = '';
+    let buffer = "";
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
+      const lines = buffer.split("\n");
       buffer = lines.pop();
 
       for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const event = JSON.parse(line.slice(6));
-            addTimelineItem(timeline, event);
+        if (!line.startsWith("data: ")) continue;
+        let event;
+        try {
+          event = JSON.parse(line.slice(6));
+        } catch {
+          continue;
+        }
 
-            if (event.step === 'done' && event.data) {
-              displayResults(event.data, iacContent);
-              metrics.scans++;
-              metrics.vulns += (event.data.vulnerabilities || []).length;
-              if (event.data.patched_code) metrics.patches++;
-              updateMetrics();
-            }
-          } catch (e) {
-            // skip malformed events
-          }
+        if (event.step === "error") {
+          renderStep("error", "error", event.message);
+          toast(event.message || "The audit failed.", "error");
+        } else if (event.step === "done" && event.data) {
+          displayResults(event.data, input.iacContent);
+          recordScan(event.data);
+        } else if (STEP_LABELS[event.step]) {
+          renderStep(event.step, event.status === "complete" ? "complete" : "running",
+            event.message);
         }
       }
     }
   } catch (err) {
-    addTimelineItem(timeline, {
-      step: 'error',
-      status: 'error',
-      message: 'Connection error: ' + err.message,
-    });
+    toast("Connection lost: " + err.message, "error");
   } finally {
-    btn.disabled = false;
-    btn.innerHTML = 'Stream (SSE)';
+    setBusy(btn, false);
   }
-}
+});
 
-function addTimelineItem(container, event) {
-  const item = document.createElement('div');
-  item.className = `timeline-item ${event.status === 'complete' ? 'complete' : 'running'}`;
-
-  const time = new Date().toLocaleTimeString();
-  item.innerHTML = `
-    <div class="timeline-message">${event.message || event.step}</div>
-    <div class="timeline-time">${time}</div>
-  `;
-
-  container.appendChild(item);
-  container.scrollTop = container.scrollHeight;
-}
-
-// Display results
+/* ---------- Results ---------- */
 
 function displayResults(result, originalCode) {
-  const resultsDiv = document.getElementById('scan-results');
-  resultsDiv.style.display = 'block';
+  $("scan-results").hidden = false;
 
   const score = result.security_score || 0;
-  const circle = document.getElementById('score-circle');
   const circumference = 2 * Math.PI * 52;
-  const offset = circumference - (score / 100) * circumference;
-  circle.style.strokeDashoffset = offset;
+  const circle = $("score-circle");
+  circle.style.strokeDashoffset = circumference - (score / 100) * circumference;
 
-  let color;
-  if (score >= 80) color = 'var(--green)';
-  else if (score >= 50) color = 'var(--amber)';
-  else color = 'var(--red)';
-  circle.style.stroke = color;
+  const tone = score >= 80 ? "var(--ok)" : score >= 50 ? "var(--warn)" : "var(--danger)";
+  circle.style.stroke = tone;
+  $("score-display").textContent = score;
+  $("score-display").style.color = tone;
 
-  document.getElementById('score-display').textContent = score;
-  document.getElementById('score-display').style.color = color;
-
-  const vulnList = document.getElementById('vuln-list');
   const vulns = result.vulnerabilities || [];
-  document.getElementById('vuln-count').textContent = `${vulns.length} found`;
+  $("score-headline").textContent =
+    score >= 80 ? "Looking solid" : score >= 50 ? "Needs attention" : "High risk";
+  $("score-note").textContent =
+    vulns.length === 0
+      ? "No issues were identified in this configuration."
+      : `${vulns.length} issue${vulns.length === 1 ? "" : "s"} found. Review the findings below and apply the suggested patch.`;
 
-  if (vulns.length === 0) {
-    vulnList.innerHTML = `
-      <div class="empty-state" style="padding: 28px;">
-        <h3>No vulnerabilities detected</h3>
-        <p>Your configuration looks secure.</p>
-      </div>`;
-  } else {
-    vulnList.innerHTML = vulns
-      .map(
-        (v) => `
-      <div class="vuln-item">
-        <span class="severity-badge ${(v.severity || 'low').toLowerCase()}">${v.severity || 'LOW'}</span>
-        <div class="vuln-details">
-          <h4>${escapeHtml(v.title || 'Unnamed')}</h4>
-          <p>${escapeHtml(v.description || '')}</p>
-          ${v.resource ? `<div class="vuln-resource">${escapeHtml(v.resource)}</div>` : ''}
-          ${v.remediation ? `<p style="color: var(--green); margin-top: 5px; font-size: 0.75rem;">${escapeHtml(v.remediation)}</p>` : ''}
-        </div>
+  const tally = {};
+  vulns.forEach((v) => {
+    const s = severityClass(v.severity);
+    tally[s] = (tally[s] || 0) + 1;
+  });
+  $("severity-tally").innerHTML = ["critical", "high", "medium", "low"]
+    .filter((s) => tally[s])
+    .map((s) => `<span class="badge ${s}">${tally[s]} ${s}</span>`)
+    .join("");
+
+  $("vuln-count").textContent = vulns.length ? `${vulns.length} found` : "";
+
+  $("vuln-list").innerHTML = vulns.length === 0
+    ? `<div class="empty">
+        ${icon("check")}
+        <h3>No findings</h3>
+        <p>This configuration passed all checks.</p>
       </div>`
-      )
-      .join('');
+    : vulns.map((v) => `
+      <div class="finding">
+        <span class="badge ${severityClass(v.severity)}">${escapeHtml(v.severity || "LOW")}</span>
+        <div class="finding-body">
+          <h4>${escapeHtml(v.title || "Untitled finding")}</h4>
+          <p>${escapeHtml(v.description || "")}</p>
+          ${v.resource ? `<div class="finding-resource">${escapeHtml(v.resource)}</div>` : ""}
+          ${v.remediation ? `<div class="finding-fix">${icon("check")}<span>${escapeHtml(v.remediation)}</span></div>` : ""}
+        </div>
+      </div>`).join("");
+
+  $("code-original").textContent = originalCode || "";
+  $("code-patched").textContent = result.patched_code || "No patch was needed.";
+
+  $("scan-results").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+/* ---------- Diagram check ---------- */
+
+let diagramFile = null;
+const MAX_DIAGRAM_BYTES = 8 * 1024 * 1024;
+
+function acceptDiagram(file) {
+  if (!file) return;
+  if (!file.type.startsWith("image/")) {
+    toast("That file isn't an image.", "error");
+    return;
   }
-
-  document.getElementById('code-original').textContent = originalCode || '';
-  document.getElementById('code-patched').textContent = result.patched_code || '// No patches generated';
-
-  resultsDiv.scrollIntoView({ behavior: 'smooth', block: 'start' });
-}
-
-// Diagram audit
-
-let selectedDiagramFile = null;
-
-const diagramInput = document.getElementById('diagram-file-input');
-const diagramZone = document.getElementById('diagram-upload-zone');
-
-if (diagramInput) {
-  diagramInput.addEventListener('change', (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      selectedDiagramFile = file;
-      showDiagramPreview(file);
-      document.getElementById('btn-diagram-audit').disabled = false;
-    }
-  });
-}
-
-if (diagramZone) {
-  diagramZone.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    diagramZone.classList.add('dragover');
-  });
-
-  diagramZone.addEventListener('dragleave', () => {
-    diagramZone.classList.remove('dragover');
-  });
-
-  diagramZone.addEventListener('drop', (e) => {
-    e.preventDefault();
-    diagramZone.classList.remove('dragover');
-    const file = e.dataTransfer.files[0];
-    if (file && file.type.startsWith('image/')) {
-      selectedDiagramFile = file;
-      showDiagramPreview(file);
-      document.getElementById('btn-diagram-audit').disabled = false;
-    }
-  });
-}
-
-function showDiagramPreview(file) {
-  const preview = document.getElementById('diagram-preview');
-  const img = document.getElementById('diagram-preview-img');
+  if (file.size > MAX_DIAGRAM_BYTES) {
+    toast("Diagrams are limited to 8 MB.", "error");
+    return;
+  }
+  diagramFile = file;
   const reader = new FileReader();
   reader.onload = (e) => {
-    img.src = e.target.result;
-    preview.style.display = 'block';
+    $("diagram-preview-img").src = e.target.result;
+    $("diagram-preview").hidden = false;
   };
   reader.readAsDataURL(file);
+  $("btn-diagram-audit").disabled = false;
 }
 
-async function startDiagramAudit() {
-  const iacContent = document.getElementById('diagram-iac-input').value.trim();
-  if (!iacContent) {
-    alert('Please paste your Terraform configuration.');
+$("diagram-file-input").addEventListener("change", (e) => acceptDiagram(e.target.files[0]));
+
+const dropzone = $("diagram-dropzone");
+
+dropzone.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  dropzone.classList.add("dragover");
+});
+
+dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover"));
+
+dropzone.addEventListener("drop", (e) => {
+  e.preventDefault();
+  dropzone.classList.remove("dragover");
+  acceptDiagram(e.dataTransfer.files[0]);
+});
+
+$("btn-diagram-audit").addEventListener("click", async () => {
+  const iacContent = $("diagram-iac-input").value.trim();
+  if (iacContent.length < 10) {
+    toast("Paste the Terraform configuration first.", "error");
     return;
   }
-  if (!selectedDiagramFile) {
-    alert('Please upload an architecture diagram.');
+  if (!diagramFile) {
+    toast("Choose an architecture diagram to compare against.", "error");
     return;
   }
 
-  const btn = document.getElementById('btn-diagram-audit');
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px;margin:0;"></span> Analyzing...';
+  const btn = $("btn-diagram-audit");
+  setBusy(btn, true, "Comparing…");
 
   const formData = new FormData();
-  formData.append('iac_content', iacContent);
-  formData.append('file_name', 'main.tf');
-  formData.append('diagram', selectedDiagramFile);
+  formData.append("iac_content", iacContent);
+  formData.append("file_name", "main.tf");
+  formData.append("diagram", diagramFile);
 
   try {
-    const res = await fetch(`${API_BASE}/audit/diagram`, {
-      method: 'POST',
-      body: formData,
-    });
-
-    if (!res.ok) throw new Error('Diagram audit failed');
+    const res = await fetch(`${API}/audit/diagram`, { method: "POST", body: formData });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(typeof err.detail === "string" ? err.detail : "Comparison failed");
+    }
 
     const result = await res.json();
-    const resultsDiv = document.getElementById('diagram-results');
-    document.getElementById('diagram-analysis-content').textContent =
-      result.diagram_analysis || 'No analysis available.';
-    resultsDiv.style.display = 'block';
+    $("diagram-analysis-content").textContent =
+      result.diagram_analysis || "No analysis was returned.";
+    $("diagram-results").hidden = false;
+    $("diagram-results").scrollIntoView({ behavior: "smooth", block: "start" });
 
-    metrics.scans++;
-    updateMetrics();
+    recordScan(result);
   } catch (err) {
-    alert('Error: ' + err.message);
+    toast(err.message, "error");
   } finally {
-    btn.disabled = false;
-    btn.innerHTML = 'Validate Diagram';
+    setBusy(btn, false);
   }
-}
+});
 
-// Semantic search
+/* ---------- Search ---------- */
 
-async function semanticSearch() {
-  const query = document.getElementById('search-input').value.trim();
-  if (!query) return;
+async function runSearch() {
+  const query = $("search-input").value.trim();
+  if (query.length < 3) {
+    toast("Type at least three characters to search.", "info");
+    return;
+  }
 
-  const container = document.getElementById('search-results-container');
-  container.innerHTML = '<div class="spinner"></div><p class="loading-text">Searching...</p>';
+  const container = $("search-results");
+  container.innerHTML = `<div class="loading"><div class="spinner"></div>Searching…</div>`;
 
   try {
-    const res = await fetch(`${API_BASE}/search`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    const res = await fetch(`${API}/search`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query, limit: 10 }),
     });
 
-    if (!res.ok) throw new Error('Search failed');
-
+    if (!res.ok) throw new Error("Search failed");
     const data = await res.json();
 
     if (data.results.length === 0) {
       container.innerHTML = `
-        <div class="empty-state" style="padding: 28px;">
-          <h3>No matching results</h3>
-          <p>Try a different query or run more scans first.</p>
+        <div class="empty">
+          ${icon("search")}
+          <h3>No matches</h3>
+          <p>Try different wording, or run more scans to build up history.</p>
         </div>`;
       return;
     }
 
     container.innerHTML = `
-      <div class="search-results">
-        ${data.results
-          .map(
-            (r) => `
-          <div class="search-result-item">
-            <div class="result-header">
-              <span class="result-type">${escapeHtml(r.vulnerability_type)}</span>
-              <span class="similarity-badge">${(r.similarity_score * 100).toFixed(1)}% match</span>
+      <div class="result-list">
+        ${data.results.map((r) => `
+          <div class="result">
+            <div class="result-head">
+              <span class="result-title">${escapeHtml(r.vulnerability_type)}</span>
+              <span class="badge neutral">${(r.similarity_score * 100).toFixed(0)}% match</span>
             </div>
-            <p class="result-desc">${escapeHtml(r.description)}</p>
-            <div style="margin-top: 6px; font-size: 0.68rem; color: var(--text-muted);">
-              ${escapeHtml(r.file_name)} · ${r.audit_id}
-            </div>
-          </div>`
-          )
-          .join('')}
+            <p>${escapeHtml(r.description)}</p>
+            <div class="result-meta">${escapeHtml(r.file_name)} · ${escapeHtml(r.audit_id)}</div>
+          </div>`).join("")}
       </div>`;
   } catch (err) {
     container.innerHTML = `
-      <div class="empty-state" style="padding: 28px;">
-        <h3>Search error</h3>
+      <div class="empty">
+        ${icon("alert")}
+        <h3>Search unavailable</h3>
         <p>${escapeHtml(err.message)}</p>
       </div>`;
   }
 }
 
-const searchInput = document.getElementById('search-input');
-if (searchInput) {
-  searchInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') semanticSearch();
-  });
-}
+$("btn-search").addEventListener("click", runSearch);
+$("search-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") runSearch();
+});
 
-// Audit history
+/* ---------- History ---------- */
 
 async function loadHistory() {
-  const container = document.getElementById('history-list');
-  container.innerHTML = '<div class="spinner"></div>';
+  const container = $("history-list");
+  container.innerHTML = `<div class="loading"><div class="spinner"></div></div>`;
 
   try {
-    const res = await fetch(`${API_BASE}/history`);
-    if (!res.ok) throw new Error('Failed to load history');
+    const res = await fetch(`${API}/history`);
+    if (!res.ok) throw new Error("Failed to load history");
+    const rows = await res.json();
+    historyState.loaded = true;
 
-    const data = await res.json();
-
-    if (data.length === 0) {
+    if (rows.length === 0) {
       container.innerHTML = `
-        <div class="empty-state">
-          <h3>No audit history</h3>
-          <p>Run your first scan to see results here.</p>
+        <div class="empty">
+          ${icon("inbox")}
+          <h3>No history yet</h3>
+          <p>Findings from your scans will accumulate here.</p>
         </div>`;
       return;
     }
 
     container.innerHTML = `
-      <div class="vuln-list">
-        ${data
-          .map(
-            (item) => `
-          <div class="vuln-item">
-            <span class="severity-badge ${(item.severity || 'low').toLowerCase()}">${item.severity || 'LOW'}</span>
-            <div class="vuln-details">
-              <h4>${escapeHtml(item.vulnerability_type || 'Unknown')}</h4>
-              <p>${escapeHtml(item.description || '')}</p>
-              <div style="margin-top: 5px; font-size: 0.68rem; color: var(--text-muted);">
-                ${escapeHtml(item.file_name)} · ${item.audit_id}
-                ${item.created_at ? ` · ${new Date(item.created_at).toLocaleString()}` : ''}
+      <div class="finding-list">
+        ${rows.map((item) => `
+          <div class="finding">
+            <span class="badge ${severityClass(item.severity)}">${escapeHtml(item.severity || "LOW")}</span>
+            <div class="finding-body">
+              <h4>${escapeHtml(item.vulnerability_type || "Unknown")}</h4>
+              <p>${escapeHtml(item.description || "")}</p>
+              <div class="finding-when">
+                ${escapeHtml(item.file_name)} · ${escapeHtml(item.audit_id)}
+                ${item.created_at ? ` · ${relativeTime(item.created_at)}` : ""}
               </div>
             </div>
-          </div>`
-          )
-          .join('')}
+          </div>`).join("")}
       </div>`;
   } catch (err) {
     container.innerHTML = `
-      <div class="empty-state">
-        <h3>Connection Error</h3>
-        <p>${escapeHtml(err.message)}. Make sure the backend is running.</p>
+      <div class="empty">
+        ${icon("alert")}
+        <h3>Couldn't reach the API</h3>
+        <p>${escapeHtml(err.message)}</p>
       </div>`;
   }
 }
 
-// Metrics update
+$("btn-refresh-history").addEventListener("click", loadHistory);
 
-function updateMetrics() {
-  document.getElementById('metric-scans').textContent = metrics.scans;
-  document.getElementById('metric-vulns').textContent = metrics.vulns;
-  document.getElementById('metric-patches').textContent = metrics.patches;
-  document.getElementById('metric-rag').textContent = metrics.ragRetrievals;
-}
+/* ---------- Init ---------- */
 
-// Utilities
-
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
-}
+checkHealth();
+loadRecentActivity();
+setInterval(checkHealth, 60000);
