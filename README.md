@@ -2,6 +2,8 @@
 
 Scans Terraform and Docker Compose configs for security issues using a multi-agent LLM pipeline — Groq (Llama 3.3) for auditing and patch generation, Gemini for embeddings and diagram analysis, pgvector for retrieval over past findings.
 
+**[Live demo](https://cloud-guard-ai.duckdns.org)** — running on AWS.
+
 ## Running locally
 
 You'll need Docker (or Podman), a [Groq API key](https://console.groq.com/) and a [Gemini API key](https://aistudio.google.com/).

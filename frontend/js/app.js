@@ -84,6 +84,7 @@ function openTab(name) {
 }
 
 document.querySelectorAll(".nav-item[data-tab]").forEach((item) => {
+  item.title = item.dataset.title;
   item.addEventListener("click", () => openTab(item.dataset.tab));
 });
 
@@ -96,6 +97,20 @@ $("menu-btn").addEventListener("click", () => {
 });
 
 $("scrim").addEventListener("click", closeNav);
+
+function applySidebar(rail) {
+  if (rail) document.documentElement.setAttribute("data-sidebar", "rail");
+  else document.documentElement.removeAttribute("data-sidebar");
+  $("sidebar-toggle").setAttribute("aria-label", rail ? "Expand sidebar" : "Collapse sidebar");
+}
+
+$("sidebar-toggle").addEventListener("click", () => {
+  const rail = !document.documentElement.hasAttribute("data-sidebar");
+  localStorage.setItem("cg-sidebar", rail ? "rail" : "full");
+  applySidebar(rail);
+});
+
+applySidebar(document.documentElement.getAttribute("data-sidebar") === "rail");
 
 /* ---------- Health ---------- */
 

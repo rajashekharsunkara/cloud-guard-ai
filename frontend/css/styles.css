@@ -125,7 +125,8 @@ body {
   position: fixed;
   inset: 0 auto 0 0;
   z-index: 60;
-  transition: transform 0.25s var(--ease), background-color 0.25s var(--ease);
+  transition: transform 0.25s var(--ease), width 0.25s var(--ease),
+    background-color 0.25s var(--ease);
 }
 
 .brand {
@@ -160,6 +161,51 @@ body {
   font-size: 0.68rem;
   color: var(--text-3);
   display: block;
+}
+
+.brand-text { min-width: 0; }
+
+.sidebar-toggle {
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.15s var(--ease), color 0.15s var(--ease);
+}
+
+.sidebar-toggle:hover { background: var(--surface-2); color: var(--text); }
+
+/* Collapsed icon rail (desktop only; the drawer takes over below 1024px) */
+@media (min-width: 1025px) {
+  [data-sidebar="rail"] { --sidebar-w: 64px; }
+
+  [data-sidebar="rail"] .brand {
+    flex-direction: column;
+    gap: 10px;
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  [data-sidebar="rail"] .brand-text { display: none; }
+  [data-sidebar="rail"] .sidebar-toggle { margin-left: 0; }
+  [data-sidebar="rail"] .nav-label { display: none; }
+
+  [data-sidebar="rail"] .nav-item {
+    justify-content: center;
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  [data-sidebar="rail"] .nav-item span { display: none; }
+  [data-sidebar="rail"] .service-status { display: none; }
+  [data-sidebar="rail"] .theme-toggle span { display: none; }
 }
 
 .nav-group { margin-bottom: 16px; }
@@ -316,8 +362,8 @@ body.nav-open .scrim { opacity: 1; pointer-events: auto; }
   flex: 1;
   margin-left: var(--sidebar-w);
   padding: 28px 32px 48px;
-  max-width: 1160px;
-  width: 100%;
+  min-width: 0;
+  transition: margin-left 0.25s var(--ease);
 }
 
 .page { display: none; }

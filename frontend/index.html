@@ -14,6 +14,9 @@
       var dark = saved ? saved === "dark"
         : window.matchMedia("(prefers-color-scheme: dark)").matches;
       if (dark) document.documentElement.setAttribute("data-theme", "dark");
+      if (localStorage.getItem("cg-sidebar") === "rail") {
+        document.documentElement.setAttribute("data-sidebar", "rail");
+      }
     })();
   </script>
 </head>
@@ -58,10 +61,13 @@
         <div class="brand-mark">
           <svg class="icon"><use href="#i-shield"/></svg>
         </div>
-        <div>
+        <div class="brand-text">
           <h1>CloudGuard</h1>
           <span class="brand-sub">IaC security auditing</span>
         </div>
+        <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Collapse sidebar">
+          <svg class="icon"><use href="#i-menu"/></svg>
+        </button>
       </div>
 
       <nav class="nav-group" aria-label="Main">
