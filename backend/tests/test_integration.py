@@ -341,3 +341,16 @@ class TestOwnKeyEndpoints:
         )
         assert response.status_code == 400
         assert "own API key" in response.json()["detail"]
+
+    def test_usage_reports_free_tier_state(self):
+        from backend.app.services.free_tier import free_tier
+
+        with patch("backend.app.routers.auditor.FreeQuota") as mock_quota:
+            mock_quota.return_value.enabled = True
+            mock_quota.return_value.remaining = AsyncMock(return_value=3)
+            free_tier.mark_busy(45)
+            data = client.get("/api/usage").json()
+        assert data["free_tier_state"] == "busy"
+        assert 40 <= data["retry_after"] <= 45
+        assert data["free_scans_left"] == 3
+        assert data["resets_at"].endswith("T00:00:00+00:00")

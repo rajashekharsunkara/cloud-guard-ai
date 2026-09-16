@@ -46,6 +46,7 @@ from backend.app.schemas.auditor import (
 from backend.app.services import llm
 from backend.app.services.agents import generate_embedding
 from backend.app.services.db_service import DBService
+from backend.app.services.free_tier import free_tier, next_utc_midnight
 from backend.app.services.pipeline import (
     Scan,
     ScanFailed,
@@ -151,11 +152,15 @@ async def health_check(db: AsyncSession = Depends(get_db)):
 
 @router.get("/usage", response_model=UsageResponse)
 async def usage(quota: FreeQuota = Depends(get_quota)):
-    """Free explained scans left for this client today."""
+    """Free explained scans left for this client today, and the shared tier's state."""
+    status = free_tier.status()
     return UsageResponse(
         explanations_available=quota.enabled,
         free_scans_per_day=settings.free_llm_scans_per_day,
         free_scans_left=await quota.remaining(),
+        free_tier_state=status["state"],
+        retry_after=status["retry_after"],
+        resets_at=next_utc_midnight().isoformat(),
     )
 
 

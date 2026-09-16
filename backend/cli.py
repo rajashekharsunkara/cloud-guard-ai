@@ -284,13 +284,17 @@ def write_patches(result: dict, directory: str) -> None:
 
 
 def _clean_notices(result: dict, choice: Optional[llm.LlmChoice]) -> None:
-    notices = result["analysis"]["notices"]
-    if choice is None:
-        # The web app's free-tier notices don't apply on the command line.
-        notices[:] = [n for n in notices if "free explanations" not in n]
-    notices[:] = [
+    analysis = result["analysis"]
+    if choice is None and analysis.get("limit"):
+        # The web app's free-tier messages don't apply on the command line,
+        # where no key simply means a Checkov-only scan.
+        from backend.app.services.pipeline import limit_notice
+
+        analysis["notices"].remove(limit_notice(analysis["limit"]))
+        analysis["limit"] = None
+    analysis["notices"] = [
         n.replace(" Check it in Model settings.", "").replace(" in Model settings", "")
-        for n in notices
+        for n in analysis["notices"]
     ]
 
 

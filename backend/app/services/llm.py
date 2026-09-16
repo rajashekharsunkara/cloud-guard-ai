@@ -138,11 +138,19 @@ def free_tier_choice() -> Optional[LlmChoice]:
 class LlmError(Exception):
     """A provider call failed. ``message`` is safe to show and never has the key."""
 
-    def __init__(self, kind: str, message: str, status: Optional[int] = None):
+    def __init__(
+        self,
+        kind: str,
+        message: str,
+        status: Optional[int] = None,
+        retry_after: Optional[float] = None,
+    ):
         super().__init__(message)
         self.kind = kind
         self.message = message
         self.status = status
+        # Seconds until the provider says a retry can succeed, when known.
+        self.retry_after = retry_after
 
 
 def validate_choice(provider: str, model: str, api_key: str) -> LlmChoice:
@@ -155,8 +163,39 @@ def validate_choice(provider: str, model: str, api_key: str) -> LlmChoice:
     return LlmChoice(provider, model, api_key, own_key=True)
 
 
+_RETRY_IN = re.compile(
+    r"try again in (?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?", re.IGNORECASE
+)
+
+
+def _retry_after(headers, text: str) -> Optional[float]:
+    value = headers.get("retry-after") if headers is not None else None
+    if value:
+        try:
+            return float(value)
+        except ValueError:
+            pass
+    match = _RETRY_IN.search(text)
+    if match and any(match.groups()):
+        hours, minutes, seconds = (float(g) if g else 0.0 for g in match.groups())
+        return hours * 3600 + minutes * 60 + seconds
+    return None
+
+
+def _limit_error(status, provider, text, headers) -> LlmError:
+    label = PROVIDERS[provider].label
+    lowered = text.lower()
+    retry = _retry_after(headers, text)
+    # Groq reports which window ran out, e.g. "on tokens per day (TPD)".
+    if re.search(r"per day|\((?:tpd|rpd)\)", lowered):
+        return LlmError("daily_limit", f"{label} daily limit reached.", status, retry)
+    return LlmError(
+        "rate_limit", f"{label} rate limit or quota reached.", status, retry
+    )
+
+
 def _error_from_status(
-    status: Optional[int], provider: str, text: str = ""
+    status: Optional[int], provider: str, text: str = "", headers=None
 ) -> LlmError:
     label = PROVIDERS[provider].label
     lowered = text.lower()
@@ -168,12 +207,14 @@ def _error_from_status(
         return LlmError(
             "not_found", f"{label} doesn't offer that model to this key.", status
         )
-    if status == 429 or (status == 413 and "rate" in lowered):
-        return LlmError("rate_limit", f"{label} rate limit or quota reached.", status)
-    if status == 413:
+    # "Request too large" can mention rate limits, but it means this single
+    # request is bigger than the per-minute allowance: waiting won't help.
+    if status == 413 or "request too large" in lowered:
         return LlmError(
             "too_large", f"The request was too large for this {label} model.", status
         )
+    if status == 429:
+        return _limit_error(status, provider, text, headers)
     if status is not None and 400 <= status < 500:
         return LlmError(
             "bad_request", f"{label} couldn't handle the request ({status}).", status
@@ -185,7 +226,8 @@ def classify(error: Exception, provider: str) -> LlmError:
     if isinstance(error, LlmError):
         return error
     if isinstance(error, (openai.APIStatusError, anthropic.APIStatusError)):
-        return _error_from_status(error.status_code, provider, str(error))
+        headers = getattr(getattr(error, "response", None), "headers", None)
+        return _error_from_status(error.status_code, provider, str(error), headers)
     if isinstance(error, genai_errors.APIError):
         return _error_from_status(error.code, provider, str(error))
     if isinstance(error, (openai.APIConnectionError, anthropic.APIConnectionError)):

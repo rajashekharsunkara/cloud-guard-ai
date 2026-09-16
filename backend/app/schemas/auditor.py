@@ -145,6 +145,16 @@ class UsageResponse(BaseModel):
     explanations_available: bool
     free_scans_per_day: int
     free_scans_left: int
+    free_tier_state: str = Field(
+        default="ok",
+        description="ok, busy (per-minute limit, retry soon) or exhausted (site-wide daily limit)",
+    )
+    retry_after: int = Field(
+        default=0, description="Seconds until the free tier is usable again"
+    )
+    resets_at: Optional[str] = Field(
+        default=None, description="When your own free scans reset (UTC)"
+    )
 
 
 class ProviderInfo(BaseModel):

@@ -62,9 +62,11 @@ class Settings(BaseSettings):
 
     # Model budgets. The defaults fit Groq's free tier, which allows 8,000
     # tokens per minute for gpt-oss-120b; raise them on a paid tier.
-    llm_review_max_chars: int = Field(default=16_000)
-    llm_max_explained_findings: int = Field(default=25)
-    llm_patch_max_file_chars: int = Field(default=12_000)
+    # Terraform runs about 2.5 characters per token, so ~9,000 characters of
+    # files plus the findings list stays under that per-request ceiling.
+    llm_review_max_chars: int = Field(default=9_000)
+    llm_max_explained_findings: int = Field(default=20)
+    llm_patch_max_file_chars: int = Field(default=8_000)
     llm_max_patched_files: int = Field(default=3)
     llm_patch_concurrency: int = Field(default=1)
 

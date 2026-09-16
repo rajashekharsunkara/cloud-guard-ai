@@ -3,11 +3,13 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import AsyncIterator, Optional
 
 from backend.app.core.config import settings
 from backend.app.services import agents, llm
 from backend.app.services.checkov import ScannerError, run_checkov, safe_relative_path
+from backend.app.services.free_tier import free_tier, next_utc_midnight
 from backend.app.services.severity import score_findings
 
 logger = logging.getLogger("cloudguard.pipeline")
@@ -73,11 +75,55 @@ def _plural(n: int, word: str, many: str = None) -> str:
     return f"{n} {word if n == 1 else (many or word + 's')}"
 
 
-BUSY_NOTICE = (
-    "The explanation model is at its per-minute limit right now, because the free "
-    "tier is shared by everyone using this site. The Checkov results are complete; "
-    "scan again in a minute for explanations and patches. This didn't use a free scan."
-)
+def humanize_wait(seconds: float) -> str:
+    seconds = max(1, round(seconds or 0))
+    if seconds < 90:
+        return f"{seconds} seconds"
+    if seconds < 90 * 60:
+        return f"{round(seconds / 60)} minutes"
+    return f"{round(seconds / 3600)} hours"
+
+
+FREE_SCAN_NOTE = "Checkov scans stay free and unlimited in the meantime"
+
+
+def limit_notice(limit: dict) -> str:
+    """The message for a free-tier limit. ``limit`` is what the UI also gets."""
+    kind, wait = limit["kind"], humanize_wait(limit.get("retry_after") or 60)
+    if kind == "busy":
+        return (
+            "Our free explanation model is busy right now. The results below are the "
+            "free Checkov scan and they're complete. Try again in about "
+            f"{wait}, or add your own API key to get explanations without waiting. "
+            "This didn't use one of your free scans."
+        )
+    if kind == "site_daily":
+        return (
+            "Free explanations have run out for today across the whole site and come "
+            f"back in about {wait}. The results below are the free Checkov scan. "
+            f"{FREE_SCAN_NOTE}, or add your own API key to get explanations now."
+        )
+    if kind == "visitor_daily":
+        return (
+            f"You've used your {settings.free_llm_scans_per_day} free explained scans "
+            f"for today. They reset at midnight UTC, in about {wait}. "
+            f"{FREE_SCAN_NOTE}, or add your own API key to get explanations now."
+        )
+    if kind == "too_large":
+        return (
+            "This is more code than the free explanation model can read at once. "
+            "The Checkov results below are complete. Scan a smaller folder, or add "
+            "your own API key to get explanations for large projects."
+        )
+    if kind == "patch_busy":
+        return (
+            "Findings are explained, but writing the patch hit the free model's limit. "
+            f"Try again in about {wait}, or add your own API key."
+        )
+    return (
+        "Explanations aren't available on this server, so only the Checkov results "
+        "are shown. Add your own API key for explanations and patches."
+    )
 
 
 @dataclass(frozen=True)
@@ -110,18 +156,37 @@ def model_failure_notice(error: Exception, choice: llm.LlmChoice) -> str:
     if not isinstance(error, llm.LlmError):
         return f"Explanations couldn't be generated for this scan. {complete}"
     if not choice.own_key:
-        if error.kind == "rate_limit":
-            return BUSY_NOTICE
         return f"Explanations couldn't be generated for this scan. {complete}"
     messages = {
         "auth": f"Your {choice.label} key was rejected. Check it in Model settings.",
         "not_found": f"Your {choice.label} key can't use {choice.model}. "
         "Pick another model in Model settings.",
-        "rate_limit": f"Your {choice.label} account hit a rate limit or ran out of quota.",
+        "rate_limit": f"Your {choice.label} account hit a rate limit. Try again shortly.",
+        "daily_limit": f"Your {choice.label} account reached its daily limit.",
         "refused": f"{choice.label} declined to review this file.",
         "too_large": f"The files were too large for {choice.model}.",
     }
     return f"{messages.get(error.kind, error.message)} {complete}"
+
+
+def free_tier_limit(error: Exception) -> Optional[dict]:
+    """Record a shared-key limit and describe it, or None for other failures."""
+    if not isinstance(error, llm.LlmError):
+        return None
+    if error.kind == "rate_limit":
+        free_tier.mark_busy(error.retry_after)
+        return {"kind": "busy", **_status_fields()}
+    if error.kind == "daily_limit":
+        free_tier.mark_exhausted(error.retry_after)
+        return {"kind": "site_daily", **_status_fields()}
+    if error.kind == "too_large":
+        return {"kind": "too_large", "retry_after": None, "resets_at": None}
+    return None
+
+
+def _status_fields() -> dict:
+    status = free_tier.status()
+    return {"retry_after": status["retry_after"], "resets_at": status["resets_at"]}
 
 
 def files_to_patch(
@@ -162,6 +227,9 @@ class Scan:
         self.audit_id = uuid.uuid4().hex[:12]
 
         self.mode = "static"
+        # Set when a free-tier limit shaped the result, so the UI can offer
+        # the right next step (wait, come back tomorrow, bring a key).
+        self.limit: Optional[dict] = None
         self.choice: Optional[llm.LlmChoice] = None
         self.budget = Budget.free()
         self.notices: list[str] = []
@@ -169,6 +237,7 @@ class Scan:
         self.additional: list[dict] = []
         self.similar: list[dict] = []
         self.patches: list[dict] = []
+        self.patch_error: Optional[Exception] = None
         self.diagram_analysis: Optional[str] = None
         self.checkov_version = ""
         self.covered_files: list[str] = []
@@ -234,21 +303,39 @@ class Scan:
             return True
         free_choice = llm.free_tier_choice()
         if free_choice is None or not self.quota.enabled:
-            self.notices.append(
-                "This server doesn't offer free explanations, so only the Checkov "
-                "results are shown. Add your own API key in Model settings for "
-                "explanations and patches."
+            self._set_limit(
+                {"kind": "unavailable", "retry_after": None, "resets_at": None}
+            )
+            return False
+        status = free_tier.status()
+        if status["state"] != "ok":
+            kind = "site_daily" if status["state"] == "exhausted" else "busy"
+            self._set_limit(
+                {
+                    "kind": kind,
+                    "retry_after": status["retry_after"],
+                    "resets_at": status["resets_at"],
+                }
             )
             return False
         if not await self.quota.claim():
-            self.notices.append(
-                f"You've used today's {settings.free_llm_scans_per_day} free explained "
-                "scans. The Checkov results are still complete. Explanations and "
-                "patches come back tomorrow, or add your own API key in Model settings."
+            midnight = next_utc_midnight()
+            self._set_limit(
+                {
+                    "kind": "visitor_daily",
+                    "retry_after": round(
+                        (midnight - datetime.now(timezone.utc)).total_seconds()
+                    ),
+                    "resets_at": midnight.isoformat(),
+                }
             )
             return False
         self.mode, self.choice = "free", free_choice
         return True
+
+    def _set_limit(self, limit: dict) -> None:
+        self.limit = limit
+        self.notices.append(limit_notice(limit))
 
     async def _model_steps(self) -> AsyncIterator[dict]:
         async for item in self._review():
@@ -274,9 +361,13 @@ class Scan:
             )
         except Exception as error:
             self._log_model_failure("review", error)
+            limit = free_tier_limit(error) if self.mode == "free" else None
             if self.mode == "free":
                 await self.quota.refund()
-            self.notices.append(model_failure_notice(error, self.choice))
+            if limit:
+                self._set_limit(limit)
+            else:
+                self.notices.append(model_failure_notice(error, self.choice))
             self.mode = "static"
             yield event("review", "error", "Explanations unavailable")
             return
@@ -337,6 +428,8 @@ class Scan:
         self.patches = await self._write_patches(targets, all_findings)
 
         failed = len(targets) - len(self.patches)
+        if failed and self.mode == "free" and self._patch_hit_limit():
+            failed = 0  # the limit notice below explains it
         if failed:
             self.notices.append(
                 "A patch couldn't be written for this scan."
@@ -356,6 +449,15 @@ class Scan:
             yield event("patch_generation", "error", "Patch unavailable")
             return
         yield event("patch_generation", "complete", self._patch_message())
+
+    def _patch_hit_limit(self) -> bool:
+        limit = free_tier_limit(self.patch_error) if self.patch_error else None
+        if not limit or limit["kind"] == "too_large":
+            return False
+        if limit["kind"] == "busy":
+            limit["kind"] = "patch_busy"
+        self._set_limit(limit)
+        return True
 
     def _patch_message(self) -> str:
         if self.input.single_path:
@@ -380,6 +482,7 @@ class Scan:
                     )
                 except Exception as error:
                     self._log_model_failure(f"patch of {path}", error)
+                    self.patch_error = error
                     return None
             if not patched.strip():
                 return None
@@ -457,6 +560,7 @@ class Scan:
             "diagram_analysis": self.diagram_analysis,
             "analysis": {
                 "mode": self.mode,
+                "limit": self.limit,
                 "model": (
                     {"provider": self.choice.label, "model": self.choice.model}
                     if self.choice and self.mode != "static"

@@ -82,7 +82,18 @@ class TestErrors:
             (400, "invalid schema", "bad_request"),
             (404, "", "not_found"),
             (429, "", "rate_limit"),
-            (413, "rate_limit_exceeded tokens per minute", "rate_limit"),
+            (429, "Rate limit reached on tokens per minute (TPM)", "rate_limit"),
+            (
+                429,
+                "Rate limit reached on tokens per day (TPD): Limit 200000",
+                "daily_limit",
+            ),
+            (429, "Rate limit reached on requests per day (RPD)", "daily_limit"),
+            (
+                413,
+                "Request too large on tokens per minute (TPM): rate_limit_exceeded",
+                "too_large",
+            ),
             (413, "context too long", "too_large"),
             (503, "overloaded", "unavailable"),
             (None, "", "unavailable"),
@@ -298,3 +309,27 @@ class TestHelpers:
     )
     def test_parse_json_object(self, text, expected):
         assert llm.parse_json_object(text) == expected
+
+
+class TestRetryAfter:
+
+    @pytest.mark.parametrize(
+        "text, seconds",
+        [
+            ("Please try again in 12.5s.", 12.5),
+            ("Please try again in 7m54.2s.", 474.2),
+            ("Please try again in 1h2m3s.", 3723),
+            ("no hint here", None),
+        ],
+    )
+    def test_from_message(self, text, seconds):
+        error = llm._error_from_status(
+            429, "groq", f"Rate limit reached on tokens per minute (TPM). {text}"
+        )
+        assert error.retry_after == seconds
+
+    def test_header_wins(self):
+        error = llm._error_from_status(
+            429, "groq", "try again in 50s", headers={"retry-after": "7"}
+        )
+        assert error.retry_after == 7.0

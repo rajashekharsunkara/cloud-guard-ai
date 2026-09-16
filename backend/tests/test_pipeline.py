@@ -74,7 +74,8 @@ async def test_static_only_when_explanations_unavailable(mock_checkov):
     assert result["security_score"] == 4
     assert len(result["vulnerabilities"]) == 34
     assert result["patched_code"] == ""
-    assert "doesn't offer free explanations" in result["analysis"]["notices"][0]
+    assert "aren't available on this server" in result["analysis"]["notices"][0]
+    assert result["analysis"]["limit"]["kind"] == "unavailable"
     db.save_audit.assert_awaited_once()
     assert db.save_audit.call_args.kwargs["analysis"]["mode"] == "static"
 
@@ -149,7 +150,14 @@ async def test_daily_limit_reached(mock_checkov):
     )
     assert result["analysis"]["mode"] == "static"
     assert "free explained scans" in result["analysis"]["notices"][0]
+    assert "midnight UTC" in result["analysis"]["notices"][0]
+    assert "add your own API key" in result["analysis"]["notices"][0]
     assert result["analysis"]["free_scans_left"] == 0
+    limit = result["analysis"]["limit"]
+    assert limit["kind"] == "visitor_daily"
+    assert 0 < limit["retry_after"] <= 86400 and limit["resets_at"].endswith(
+        "00:00:00+00:00"
+    )
 
 
 @pytest.mark.asyncio
@@ -373,14 +381,24 @@ def own_choice(provider="openai", model="gpt-5.6-terra"):
 async def test_rate_limited_free_review_says_so(mock_checkov, mock_review):
     mock_checkov.return_value = sample_report()
     mock_review.side_effect = LlmError(
-        "rate_limit", "Groq rate limit or quota reached.", 413
+        "rate_limit", "Groq rate limit or quota reached.", 429, retry_after=40
     )
     quota = FakeQuota()
     _, result = await events_and_result(
         Scan(ScanInput.single("c", "main.tf"), fake_db(), quota, "ws")
     )
     assert quota.refunded
-    assert "per-minute limit" in result["analysis"]["notices"][0]
+    notice = result["analysis"]["notices"][0]
+    assert (
+        "busy right now" in notice
+        and "40 seconds" in notice
+        and "own API key" in notice
+    )
+    assert result["analysis"]["limit"] == {
+        "kind": "busy",
+        "retry_after": 40,
+        "resets_at": None,
+    }
 
 
 @pytest.mark.asyncio
@@ -430,7 +448,7 @@ async def test_own_key_skips_quota_and_uses_bigger_budget(
             "Your OpenAI key was rejected",
         ),
         (LlmError("not_found", "x", 404), "can't use gpt-5.6-terra"),
-        (LlmError("rate_limit", "x", 429), "hit a rate limit or ran out of quota"),
+        (LlmError("rate_limit", "x", 429), "hit a rate limit"),
     ],
 )
 @patch("backend.app.services.pipeline.agents.review_findings", new_callable=AsyncMock)
@@ -469,3 +487,129 @@ async def test_free_tier_needs_server_key(mock_checkov, monkeypatch):
     )
     assert result["analysis"]["mode"] == "static"
     assert "add your own api key" in result["analysis"]["notices"][0].lower()
+
+
+@pytest.mark.asyncio
+@patch("backend.app.services.pipeline.agents.review_findings", new_callable=AsyncMock)
+@patch("backend.app.services.pipeline.run_checkov")
+async def test_busy_state_skips_the_model_for_the_next_visitor(
+    mock_checkov, mock_review
+):
+    mock_checkov.return_value = sample_report()
+    mock_review.side_effect = LlmError("rate_limit", "busy", 429, retry_after=30)
+    await events_and_result(
+        Scan(ScanInput.single("c", "main.tf"), fake_db(), FakeQuota(), "ws")
+    )
+
+    mock_review.reset_mock()
+    quota = FakeQuota()
+    quota.claim = AsyncMock(return_value=True)
+    _, result = await events_and_result(
+        Scan(ScanInput.single("c", "main.tf"), fake_db(), quota, "ws2")
+    )
+
+    mock_review.assert_not_called()
+    quota.claim.assert_not_called()
+    assert result["analysis"]["limit"]["kind"] == "busy"
+    assert 25 <= result["analysis"]["limit"]["retry_after"] <= 30
+
+
+@pytest.mark.asyncio
+@patch("backend.app.services.pipeline.agents.review_findings", new_callable=AsyncMock)
+@patch("backend.app.services.pipeline.run_checkov")
+async def test_site_daily_limit(mock_checkov, mock_review):
+    mock_checkov.return_value = sample_report()
+    mock_review.side_effect = LlmError(
+        "daily_limit", "daily", 429, retry_after=3 * 3600
+    )
+    quota = FakeQuota()
+    _, result = await events_and_result(
+        Scan(ScanInput.single("c", "main.tf"), fake_db(), quota, "ws")
+    )
+
+    assert quota.refunded
+    notice = result["analysis"]["notices"][0]
+    assert "run out for today across the whole site" in notice and "3 hours" in notice
+    assert "Checkov scans stay free" in notice and "own API key" in notice
+    assert result["analysis"]["limit"]["kind"] == "site_daily"
+
+    # Everyone else skips the model until it resets.
+    mock_review.reset_mock()
+    _, again = await events_and_result(
+        Scan(ScanInput.single("c", "main.tf"), fake_db(), FakeQuota(), "ws2")
+    )
+    mock_review.assert_not_called()
+    assert again["analysis"]["limit"]["kind"] == "site_daily"
+
+
+@pytest.mark.asyncio
+@patch("backend.app.services.pipeline.agents.review_findings", new_callable=AsyncMock)
+@patch("backend.app.services.pipeline.run_checkov")
+async def test_too_large_for_free_tier_does_not_block_others(mock_checkov, mock_review):
+    from backend.app.services.free_tier import free_tier
+
+    mock_checkov.return_value = sample_report()
+    mock_review.side_effect = LlmError("too_large", "too large", 413)
+    _, result = await events_and_result(
+        Scan(ScanInput.single("c", "main.tf"), fake_db(), FakeQuota(), "ws")
+    )
+    assert result["analysis"]["limit"]["kind"] == "too_large"
+    assert "smaller folder" in result["analysis"]["notices"][0]
+    assert free_tier.status()["state"] == "ok"
+
+
+@pytest.mark.asyncio
+@patch(
+    "backend.app.services.pipeline.agents.run_patch_generation", new_callable=AsyncMock
+)
+@patch(
+    "backend.app.services.pipeline.agents.find_similar_patches", new_callable=AsyncMock
+)
+@patch("backend.app.services.pipeline.agents.review_findings", new_callable=AsyncMock)
+@patch("backend.app.services.pipeline.run_checkov")
+async def test_patch_hitting_the_limit(
+    mock_checkov, mock_review, mock_similar, mock_patch
+):
+    report = sample_report()
+    mock_checkov.return_value = report
+    mock_review.return_value = (report.findings, [])
+    mock_similar.return_value = []
+    mock_patch.side_effect = LlmError("rate_limit", "busy", 429, retry_after=20)
+    _, result = await events_and_result(
+        Scan(ScanInput.single("c", "main.tf"), fake_db(), FakeQuota(), "ws")
+    )
+    assert result["analysis"]["mode"] == "free"
+    assert result["analysis"]["limit"]["kind"] == "patch_busy"
+    assert result["analysis"]["notices"] == [
+        "Findings are explained, but writing the patch hit the free model's limit. "
+        "Try again in about 20 seconds, or add your own API key."
+    ]
+
+
+def test_humanize_wait():
+    from backend.app.services.pipeline import humanize_wait
+
+    assert humanize_wait(40) == "40 seconds"
+    assert humanize_wait(600) == "10 minutes"
+    assert humanize_wait(5 * 3600) == "5 hours"
+    assert humanize_wait(None) == "1 seconds" or humanize_wait(None)
+
+
+def test_free_tier_state():
+    from backend.app.services.free_tier import FreeTierState, next_utc_midnight
+    from datetime import datetime, timezone
+
+    state = FreeTierState()
+    assert state.status()["state"] == "ok"
+    state.mark_busy(1)
+    assert state.status() == {"state": "busy", "retry_after": 5, "resets_at": None}
+    state.mark_exhausted(None)
+    status = state.status()
+    assert status["state"] == "exhausted"
+    assert status["resets_at"] == next_utc_midnight().isoformat()
+    assert (
+        next_utc_midnight(
+            datetime(2026, 9, 16, 23, 59, tzinfo=timezone.utc)
+        ).isoformat()
+        == "2026-09-17T00:00:00+00:00"
+    )

@@ -38,3 +38,12 @@ def reset_rate_limits():
     limiter.reset()
     yield
     limiter.reset()
+
+
+@pytest.fixture(autouse=True)
+def reset_free_tier():
+    from backend.app.services.free_tier import free_tier
+
+    free_tier.reset()
+    yield
+    free_tier.reset()
