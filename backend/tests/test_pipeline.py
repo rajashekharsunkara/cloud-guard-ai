@@ -58,7 +58,7 @@ def no_side_effects():
 async def test_static_only_when_explanations_unavailable(mock_checkov):
     mock_checkov.return_value = sample_report()
     db = fake_db()
-    scan = Scan(ScanInput("code", "main.tf"), db, FakeQuota(enabled=False), "ws")
+    scan = Scan(ScanInput.single("code", "main.tf"), db, FakeQuota(enabled=False), "ws")
 
     events, result = await events_and_result(scan)
 
@@ -96,7 +96,7 @@ async def test_explained_scan(mock_checkov, mock_review, mock_similar, mock_patc
     mock_similar.return_value = [{"description": "old fix"}]
     mock_patch.return_value = "patched"
 
-    scan = Scan(ScanInput("code", "main.tf"), fake_db(), FakeQuota(), "ws")
+    scan = Scan(ScanInput.single("code", "main.tf"), fake_db(), FakeQuota(), "ws")
     events, result = await events_and_result(scan)
 
     steps = [e["step"] for e in events if e["status"] == "complete"]
@@ -128,7 +128,7 @@ async def test_review_failure_keeps_checkov_results_and_refunds(
     quota = FakeQuota()
 
     events, result = await events_and_result(
-        Scan(ScanInput("c", "main.tf"), fake_db(), quota, "ws")
+        Scan(ScanInput.single("c", "main.tf"), fake_db(), quota, "ws")
     )
 
     assert quota.refunded
@@ -144,7 +144,7 @@ async def test_daily_limit_reached(mock_checkov):
     mock_checkov.return_value = sample_report()
     quota = FakeQuota(available=False, left=0)
     _, result = await events_and_result(
-        Scan(ScanInput("c", "main.tf"), fake_db(), quota, "ws")
+        Scan(ScanInput.single("c", "main.tf"), fake_db(), quota, "ws")
     )
     assert result["analysis"]["mode"] == "static"
     assert "free explained scans" in result["analysis"]["notices"][0]
@@ -173,7 +173,7 @@ async def test_uncovered_file_has_no_score(
 
     _, result = await events_and_result(
         Scan(
-            ScanInput("services: {}", "docker-compose.yml"),
+            ScanInput.single("services: {}", "docker-compose.yml"),
             fake_db(),
             FakeQuota(),
             "ws",
@@ -203,7 +203,7 @@ async def test_patch_failure_is_a_notice(
     mock_patch.side_effect = RuntimeError("provider down")
 
     _, result = await events_and_result(
-        Scan(ScanInput("c", "main.tf"), fake_db(), FakeQuota(), "ws")
+        Scan(ScanInput.single("c", "main.tf"), fake_db(), FakeQuota(), "ws")
     )
     assert result["patched_code"] == ""
     assert result["analysis"]["mode"] == "free"
@@ -216,7 +216,9 @@ async def test_scanner_failure_fails_the_scan(mock_checkov):
     mock_checkov.side_effect = ScannerError("The static checks failed to run")
     db = fake_db()
     with pytest.raises(ScanFailed, match="failed to run"):
-        await run_to_completion(Scan(ScanInput("c", "main.tf"), db, FakeQuota(), "ws"))
+        await run_to_completion(
+            Scan(ScanInput.single("c", "main.tf"), db, FakeQuota(), "ws")
+        )
     db.save_audit.assert_not_called()
 
 
@@ -236,8 +238,153 @@ async def test_only_covered_files_feed_the_score(mock_checkov):
     )
     mock_checkov.return_value = report
     _, result = await events_and_result(
-        Scan(ScanInput("c", "main.tf"), fake_db(), FakeQuota(enabled=False), "ws")
+        Scan(
+            ScanInput.single("c", "main.tf"), fake_db(), FakeQuota(enabled=False), "ws"
+        )
     )
     # Same score as without the Compose secret, which is still listed.
     assert result["security_score"] == 4
     assert any(f["check_id"] == "CKV_SECRET_6" for f in result["vulnerabilities"])
+
+
+def multi_file_findings():
+    def f(path, severity, check_id):
+        return {
+            "source": "checkov",
+            "check_id": check_id,
+            "severity": severity,
+            "title": check_id,
+            "resource": "r",
+            "file": path,
+        }
+
+    return [
+        f("a.tf", "LOW", "CKV_1"),
+        f("b.tf", "CRITICAL", "CKV_2"),
+        f("c.tf", "HIGH", "CKV_3"),
+        f("d.tf", "MEDIUM", "CKV_4"),
+        f("e.tf", "LOW", "CKV_5"),
+        f("f.tf", "LOW", "CKV_6"),
+        f("g.tf", "HIGH", "CKV_7"),
+    ]
+
+
+def test_files_to_patch_ranks_and_caps(monkeypatch):
+    from backend.app.core.config import settings
+    from backend.app.services.pipeline import files_to_patch
+
+    monkeypatch.setattr(settings, "llm_max_patched_files", 5)
+    monkeypatch.setattr(settings, "llm_patch_max_file_chars", 100)
+    files = {f"{k}.tf": "x" for k in "abcdefg"}
+    files["c.tf"] = "x" * 101  # too large to rewrite
+    assert files_to_patch(files, multi_file_findings()) == [
+        "b.tf",
+        "g.tf",
+        "d.tf",
+        "a.tf",
+        "e.tf",
+    ]
+    assert files_to_patch(files, [{"file": "not-scanned.tf", "severity": "HIGH"}]) == []
+
+
+@pytest.mark.asyncio
+@patch(
+    "backend.app.services.pipeline.agents.run_patch_generation", new_callable=AsyncMock
+)
+@patch(
+    "backend.app.services.pipeline.agents.find_similar_patches", new_callable=AsyncMock
+)
+@patch("backend.app.services.pipeline.agents.review_findings", new_callable=AsyncMock)
+@patch("backend.app.services.pipeline.run_checkov")
+async def test_multi_file_scan(
+    mock_checkov, mock_review, mock_similar, mock_patch, monkeypatch
+):
+    from backend.app.core.config import settings
+
+    monkeypatch.setattr(settings, "llm_max_patched_files", 5)
+    monkeypatch.setattr(settings, "llm_patch_concurrency", 3)
+    files = {f"{k}.tf": f"content {k}" for k in "abcdefg"}
+    findings = multi_file_findings()
+    mock_checkov.return_value = CheckovReport(
+        findings=findings,
+        covered_files=sorted(files),
+        frameworks=["terraform"],
+        version="3.3.17",
+    )
+    mock_review.return_value = (findings, [])
+    mock_similar.return_value = []
+
+    async def fake_patch(content, context, similar, file_name):
+        if file_name == "c.tf":
+            raise RuntimeError("provider hiccup")
+        return f"patched {file_name}"
+
+    mock_patch.side_effect = fake_patch
+    db = fake_db()
+    scan = Scan(
+        ScanInput(files=files, label="org/repo", source="github"), db, FakeQuota(), "ws"
+    )
+
+    events, result = await events_and_result(scan)
+
+    assert result["file_name"] == "org/repo"
+    assert result["files"] == sorted(files)
+    assert result["patched_code"] == ""
+    assert [p["file"] for p in result["patches"]] == ["b.tf", "g.tf", "d.tf", "a.tf"]
+    assert result["patches"][0] == {
+        "file": "b.tf",
+        "original": "content b",
+        "patched": "patched b.tf",
+    }
+    notices = " ".join(result["analysis"]["notices"])
+    assert "couldn't be written for 1 file" in notices
+    assert "2 files with findings weren't patched" in notices
+    assert result["analysis"]["source"] == "github"
+
+    # Each patch only sees its own file's findings.
+    for call in mock_patch.call_args_list:
+        path = call.kwargs["file_name"]
+        assert all(ctx["check_id"] for ctx in call.args[1])
+        assert len(call.args[1]) == 1
+        assert call.args[0] == files[path]
+
+    saved = db.save_audit.call_args.kwargs
+    assert saved["files"] == sorted(files)
+    assert saved["original_code"] == ""
+    assert len(saved["patches"]) == 4
+
+
+class FakeRateLimit(Exception):
+    status_code = 413
+
+    def __str__(self):
+        return "Request too large ... tokens per minute (TPM) ... 'code': 'rate_limit_exceeded'"
+
+
+@pytest.mark.asyncio
+@patch("backend.app.services.pipeline.agents.review_findings", new_callable=AsyncMock)
+@patch("backend.app.services.pipeline.run_checkov")
+async def test_rate_limited_review_says_so(mock_checkov, mock_review):
+    mock_checkov.return_value = sample_report()
+    mock_review.side_effect = FakeRateLimit()
+    quota = FakeQuota()
+    _, result = await events_and_result(
+        Scan(ScanInput.single("c", "main.tf"), fake_db(), quota, "ws")
+    )
+    assert quota.refunded
+    assert "per-minute limit" in result["analysis"]["notices"][0]
+
+
+def test_is_rate_limited():
+    from backend.app.services.pipeline import is_rate_limited
+
+    class Err(Exception):
+        def __init__(self, status, text):
+            super().__init__(text)
+            self.status_code = status
+
+    assert is_rate_limited(Err(429, "Too Many Requests"))
+    assert is_rate_limited(Err(413, "rate_limit_exceeded: TPM"))
+    assert not is_rate_limited(Err(413, "payload too large for context"))
+    assert not is_rate_limited(Err(500, "rate_limit"))
+    assert not is_rate_limited(ValueError("bad json"))

@@ -25,7 +25,13 @@ COPY backend/ ./backend/
 COPY frontend/ ./frontend/
 
 RUN useradd --create-home --shell /usr/sbin/nologin cloudguard
+
+# Bake the embedding model into the image so containers never download it.
+ENV EMBEDDING_CACHE_DIR=/opt/models
+RUN mkdir -p /opt/models && chown cloudguard /opt/models
 USER cloudguard
+RUN python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5', cache_dir='/opt/models')"
+ENV HF_HUB_OFFLINE=1
 
 EXPOSE 8000
 

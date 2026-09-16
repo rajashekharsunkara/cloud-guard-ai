@@ -33,6 +33,23 @@ _UPGRADES = (
     "ON vulnerabilities (workspace_id)",
     "ALTER TABLE audits ADD COLUMN IF NOT EXISTS analysis JSONB",
     "ALTER TABLE audits ALTER COLUMN security_score DROP NOT NULL",
+    "ALTER TABLE audits ADD COLUMN IF NOT EXISTS files JSONB",
+    "ALTER TABLE audits ADD COLUMN IF NOT EXISTS patches JSONB",
+    # Embeddings moved from Gemini (768 dims) to a local model (384 dims).
+    # Old vectors can't be compared with new ones, so the column is replaced
+    # once; findings stay, they just drop out of similarity search.
+    """
+    DO $$ BEGIN
+        IF EXISTS (
+            SELECT 1 FROM pg_attribute
+            WHERE attrelid = 'vulnerabilities'::regclass
+              AND attname = 'embedding' AND atttypmod <> 384
+        ) THEN
+            ALTER TABLE vulnerabilities DROP COLUMN embedding;
+            ALTER TABLE vulnerabilities ADD COLUMN embedding vector(384);
+        END IF;
+    END $$
+    """,
 )
 
 

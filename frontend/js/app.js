@@ -217,8 +217,8 @@ input.addEventListener("input", () => {
   draftTimer = setTimeout(() => store("cg-draft", input.value || null), 400);
 });
 input.addEventListener("scroll", () => { gutter.scrollTop = input.scrollTop; });
-input.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !$("view-scan").hidden) {
     e.preventDefault();
     runScan();
   }
@@ -254,13 +254,17 @@ const STEPS = [
   { id: "storage", label: "Saving to history" },
 ];
 
+const FETCH_STEP = { id: "fetch", label: "Downloading repository" };
+
 const progress = {
   started: {},
   timer: null,
+  steps: STEPS,
 
-  reset() {
+  reset(withFetch = false) {
     this.started = {};
-    $("steps").innerHTML = STEPS.map((s) => `
+    this.steps = withFetch ? [FETCH_STEP, ...STEPS] : STEPS;
+    $("steps").innerHTML = this.steps.map((s) => `
       <li class="step" data-step="${s.id}" data-state="pending">
         <span class="step-marker"><span class="step-pending"></span></span>
         <div><div class="step-label">${s.label}</div><div class="step-note"></div></div>
@@ -324,7 +328,7 @@ function handleStreamEvent(event, context) {
       if (row.dataset.step !== "storage") progress.set(row.dataset.step, "skipped", "Skipped");
     });
   }
-  if (!STEPS.some((s) => s.id === event.step)) return;
+  if (!progress.steps.some((s) => s.id === event.step)) return;
   if (event.status === "running") {
     progress.set(event.step, "running");
   } else if (event.status === "error") {
@@ -362,30 +366,120 @@ function setBusy(btn, busy, label) {
 }
 
 let scanning = false;
+let activeSource = "paste";
+let zipFile = null;
 
-async function runScan() {
-  if (scanning) return;
+function selectSource(source) {
+  activeSource = source;
+  document.querySelectorAll(".source-tab").forEach((tab) => {
+    tab.setAttribute("aria-selected", String(tab.dataset.source === source));
+  });
+  document.querySelectorAll("[data-panel-source]").forEach((panel) => {
+    panel.hidden = panel.dataset.panelSource !== source;
+  });
+}
+
+document.querySelectorAll(".source-tab").forEach((tab) => {
+  tab.addEventListener("click", () => selectSource(tab.dataset.source));
+});
+
+function acceptZip(file) {
+  if (!file) return;
+  if (!/\.zip$/i.test(file.name)) {
+    toast("Choose a .zip file.", "error");
+    return;
+  }
+  if (file.size > 10 * 1024 * 1024) {
+    toast("Zip files can be up to 10 MB.", "error");
+    return;
+  }
+  zipFile = file;
+  $("zip-title").textContent = file.name;
+  $("zip-sub").textContent = `${(file.size / 1024).toFixed(0)} KB · choose another file to replace it`;
+}
+
+const zipDropzone = $("zip-dropzone");
+$("zip-file").addEventListener("change", (e) => acceptZip(e.target.files[0]));
+zipDropzone.addEventListener("dragover", (e) => { e.preventDefault(); zipDropzone.classList.add("dragover"); });
+zipDropzone.addEventListener("dragleave", () => zipDropzone.classList.remove("dragover"));
+zipDropzone.addEventListener("drop", (e) => {
+  e.preventDefault();
+  zipDropzone.classList.remove("dragover");
+  acceptZip(e.dataTransfer.files[0]);
+});
+
+document.querySelectorAll("[data-repo]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    $("repo-url").value = btn.dataset.repo;
+    $("repo-url").focus();
+  });
+});
+
+$("repo-url").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    runScan();
+  }
+});
+
+// Builds the fetch for the active source, or returns null after telling the
+// user what's missing.
+function scanRequest() {
+  if (activeSource === "zip") {
+    if (!zipFile) {
+      toast("Choose a zip file first.", "error");
+      return null;
+    }
+    const form = new FormData();
+    form.append("archive", zipFile);
+    return { url: `${API}/audit/archive`, init: { method: "POST", body: form }, original: "" };
+  }
+  if (activeSource === "github") {
+    const url = $("repo-url").value.trim();
+    if (!url) {
+      toast("Paste a GitHub repository link first.", "error");
+      $("repo-url").focus();
+      return null;
+    }
+    return {
+      url: `${API}/audit/repo`,
+      init: { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }) },
+      original: "",
+      fetches: true,
+    };
+  }
   const code = input.value;
-  const fileName = $("file-name").value.trim() || "main.tf";
   if (code.trim().length < 10) {
     toast("Paste a configuration first.", "error");
     input.focus();
-    return;
+    return null;
   }
+  const fileName = $("file-name").value.trim() || "main.tf";
+  return {
+    url: `${API}/audit/stream`,
+    init: {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ iac_content: code, file_name: fileName }),
+    },
+    original: code,
+  };
+}
+
+async function runScan() {
+  if (scanning) return;
+  const request = scanRequest();
+  if (!request) return;
 
   scanning = true;
   const btn = $("btn-scan");
   setBusy(btn, true, "Scanning");
   $("scan-report").hidden = true;
-  progress.reset();
+  progress.reset(Boolean(request.fetches));
 
   const context = { result: null };
   try {
-    const res = await fetch(`${API}/audit/stream`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ iac_content: code, file_name: fileName }),
-    });
+    const res = await fetch(request.url, request.init);
     if (!res.ok) throw await apiError(res, "The scan couldn't start.");
 
     await readEventStream(res, (event) => handleStreamEvent(event, context));
@@ -394,7 +488,7 @@ async function runScan() {
     progress.stop();
     historyCache.stale = true;
     showUsage(context.result.analysis);
-    renderReport($("scan-report"), { ...context.result, original_code: code });
+    renderReport($("scan-report"), { ...context.result, original_code: request.original });
     $("scan-report").hidden = false;
     $("scan-report").scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (err) {
@@ -539,6 +633,7 @@ function renderReport(container, result) {
   const meta = [];
   if (result.created_at) meta.push(escapeHtml(formatDate(result.created_at)));
   if (result.audit_id) meta.push(`Scan <code>${escapeHtml(result.audit_id)}</code>`);
+  if ((result.files || []).length > 1) meta.push(plural(result.files.length, "file") + " scanned");
   if (analysis && analysis.checkov_version) meta.push(`Checkov ${escapeHtml(analysis.checkov_version)}`);
 
   container.innerHTML = `
@@ -562,13 +657,15 @@ function renderReport(container, result) {
       <button class="tab" role="tab" type="button" data-tab="findings" aria-selected="true">
         Findings <span class="tab-count">${findings.length}</span>
       </button>
-      <button class="tab" role="tab" type="button" data-tab="patch" aria-selected="false">Patch</button>
+      <button class="tab" role="tab" type="button" data-tab="patch" aria-selected="false">
+        ${reportPatches(result).length > 1 ? `Patches <span class="tab-count">${reportPatches(result).length}</span>` : "Patch"}
+      </button>
     </div>
     <div class="tab-panel" data-panel="findings">${renderFindings(findings, analysis)}</div>
     <div class="tab-panel" data-panel="patch" hidden></div>`;
 
   const patchPanel = container.querySelector('[data-panel="patch"]');
-  renderPatch(patchPanel, result.original_code || "", result.patched_code || "", result.file_name || "main.tf", analysis);
+  renderPatches(patchPanel, reportPatches(result), analysis);
 
   container.querySelectorAll(".tab").forEach((tab) => {
     tab.addEventListener("click", () => {
@@ -670,8 +767,20 @@ function renderDiffTable(ops, a, b) {
   return `<table>${parts.join("")}</table>`;
 }
 
-function renderPatch(panel, original, patched, fileName, analysis) {
-  if (!patched.trim()) {
+function reportPatches(result) {
+  if (Array.isArray(result.patches) && result.patches.length) return result.patches;
+  if (result.patched_code) {
+    return [{ file: result.file_name || "main.tf", original: result.original_code || "", patched: result.patched_code }];
+  }
+  return [];
+}
+
+function baseName(path) {
+  return path.split("/").pop() || path;
+}
+
+function renderPatches(panel, patches, analysis) {
+  if (!patches.length) {
     const reason = analysis && analysis.mode === "static"
       ? "Patches are written for explained scans. This one ran Checkov only."
       : "There was nothing to fix, or the patch couldn't be written.";
@@ -679,23 +788,41 @@ function renderPatch(panel, original, patched, fileName, analysis) {
     return;
   }
 
-  const a = original.replace(/\n$/, "").split("\n");
-  const b = patched.replace(/\n$/, "").split("\n");
-  const ops = original ? diffLines(a, b) : null;
-  const added = ops ? ops.filter((o) => o.type === "add").length : 0;
-  const removed = ops ? ops.filter((o) => o.type === "del").length : 0;
+  let current = 0;
 
-  panel.innerHTML = `
-    <div class="diff-bar">
-      <span class="diff-stats">${ops ? `<span class="plus">+${added}</span> <span class="minus">−${removed}</span> lines` : escapeHtml(patchedFileName(fileName))}</span>
-      <div class="diff-actions">
-        <button class="btn btn-quiet" type="button" data-action="copy">${icon("copy")}Copy patched file</button>
-        <button class="btn btn-quiet" type="button" data-action="download">${icon("download")}Download</button>
+  const draw = () => {
+    const { file, original, patched } = patches[current];
+    const a = original.replace(/\n$/, "").split("\n");
+    const b = patched.replace(/\n$/, "").split("\n");
+    const ops = original ? diffLines(a, b) : null;
+    const added = ops ? ops.filter((o) => o.type === "add").length : 0;
+    const removed = ops ? ops.filter((o) => o.type === "del").length : 0;
+
+    const picker = patches.length > 1
+      ? `<div class="patch-files">${patches.map((p, i) => `
+          <button class="patch-file" type="button" data-patch="${i}" aria-pressed="${i === current}">${escapeHtml(p.file)}</button>`).join("")}
+        </div>`
+      : "";
+
+    panel.innerHTML = `
+      ${picker}
+      <div class="diff-bar">
+        <span class="diff-stats">${ops ? `<span class="plus">+${added}</span> <span class="minus">−${removed}</span> lines` : escapeHtml(patchedFileName(baseName(file)))}${patches.length > 1 ? ` · ${escapeHtml(file)}` : ""}</span>
+        <div class="diff-actions">
+          <button class="btn btn-quiet" type="button" data-action="copy">${icon("copy")}Copy patched file</button>
+          <button class="btn btn-quiet" type="button" data-action="download">${icon("download")}Download</button>
+        </div>
       </div>
-    </div>
-    ${ops ? `<div class="diff">${renderDiffTable(ops, a, b)}</div>` : `<pre class="plain-code">${escapeHtml(patched)}</pre>`}`;
+      ${ops ? `<div class="diff">${renderDiffTable(ops, a, b)}</div>` : `<pre class="plain-code">${escapeHtml(patched)}</pre>`}`;
+  };
 
   panel.addEventListener("click", async (e) => {
+    const pick = e.target.closest("[data-patch]");
+    if (pick) {
+      current = Number(pick.dataset.patch);
+      draw();
+      return;
+    }
     const fold = e.target.closest(".fold-btn");
     if (fold) {
       const tbody = fold.closest("tbody");
@@ -703,6 +830,7 @@ function renderPatch(panel, original, patched, fileName, analysis) {
       tbody.remove();
       return;
     }
+    const { file, patched } = patches[current];
     const action = e.target.closest("[data-action]")?.dataset.action;
     if (action === "copy") {
       try {
@@ -715,11 +843,13 @@ function renderPatch(panel, original, patched, fileName, analysis) {
       const url = URL.createObjectURL(new Blob([patched], { type: "text/plain" }));
       const link = document.createElement("a");
       link.href = url;
-      link.download = patchedFileName(fileName);
+      link.download = patchedFileName(baseName(file));
       link.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
   });
+
+  draw();
 }
 
 /* Diagram check */
@@ -851,6 +981,16 @@ function loadingRow(label) {
   return `<div class="loading-row"><span class="spinner"></span>${escapeHtml(label)}</div>`;
 }
 
+function scanSubtitle(r) {
+  const parts = [];
+  if (r.source === "github") parts.push("GitHub");
+  if (r.source === "zip") parts.push("Zip upload");
+  if (r.file_count > 1) parts.push(plural(r.file_count, "file"));
+  if (r.has_diagram) parts.push("With diagram check");
+  parts.push(plural(r.finding_count, "finding"));
+  return escapeHtml(parts.join(" · "));
+}
+
 function renderScanList(rows) {
   if (rows.length === 0) {
     return `<div class="empty-state"><h3>No scans yet</h3><p>Scans you run in this browser will be listed here. <a href="#scan">Run a scan</a></p></div>`;
@@ -863,7 +1003,7 @@ function renderScanList(rows) {
       return `<li><a class="scan-row" href="#history/${encodeURIComponent(r.audit_id)}">
         <div>
           <div class="scan-file">${escapeHtml(r.file_name)}</div>
-          <div class="scan-sub">${r.has_diagram ? "With diagram check · " : ""}${plural(r.finding_count, "finding")}</div>
+          <div class="scan-sub">${scanSubtitle(r)}</div>
         </div>
         <div class="scan-counts">${severityCounts(counts)}</div>
         <div class="scan-date">${escapeHtml(formatDate(r.created_at))}</div>

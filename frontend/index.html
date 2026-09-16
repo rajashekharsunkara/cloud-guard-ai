@@ -64,28 +64,56 @@
 
     <section class="view" id="view-scan" data-title="Scan">
       <div class="view-head">
-        <h1>Scan a configuration</h1>
-        <p>Paste a Terraform or Docker Compose file. CloudGuard lists the security problems it finds and suggests a corrected file you can compare line by line. <a href="#how">How it works</a></p>
+        <h1>Scan infrastructure code</h1>
+        <p>Paste a file, upload a zip or link a public GitHub repository. Checkov finds the security problems, and an explained scan says what each one means for your code and writes a fix you can compare line by line. <a href="#how">How it works</a></p>
       </div>
 
       <div class="workspace">
-        <div class="editor">
-          <div class="editor-bar">
-            <label class="sr-only" for="file-name">File name</label>
-            <input class="filename" id="file-name" type="text" value="main.tf" maxlength="255" spellcheck="false" autocomplete="off">
-            <span class="editor-meta" id="editor-meta"></span>
-            <span class="spacer"></span>
-            <button class="link-btn" id="btn-example" type="button">Use example</button>
-            <button class="link-btn" id="btn-clear" type="button">Clear</button>
+        <div class="scan-card">
+          <div class="source-tabs" role="tablist" aria-label="What to scan">
+            <button class="source-tab" role="tab" type="button" data-source="paste" aria-selected="true">Paste a file</button>
+            <button class="source-tab" role="tab" type="button" data-source="zip" aria-selected="false">Upload a zip</button>
+            <button class="source-tab" role="tab" type="button" data-source="github" aria-selected="false">GitHub repository</button>
           </div>
-          <div class="editor-body">
-            <pre class="gutter" id="gutter" aria-hidden="true">1</pre>
-            <label class="sr-only" for="iac-input">Configuration</label>
-            <textarea id="iac-input" wrap="off" spellcheck="false" autocapitalize="off" autocomplete="off"
-              placeholder="resource &quot;aws_s3_bucket&quot; &quot;logs&quot; {&#10;  bucket = &quot;acme-app-logs&quot;&#10;}"></textarea>
+
+          <div class="editor" data-panel-source="paste">
+            <div class="editor-bar">
+              <label class="sr-only" for="file-name">File name</label>
+              <input class="filename" id="file-name" type="text" value="main.tf" maxlength="255" spellcheck="false" autocomplete="off">
+              <span class="editor-meta" id="editor-meta"></span>
+              <span class="spacer"></span>
+              <button class="link-btn" id="btn-example" type="button">Use example</button>
+              <button class="link-btn" id="btn-clear" type="button">Clear</button>
+            </div>
+            <div class="editor-body">
+              <pre class="gutter" id="gutter" aria-hidden="true">1</pre>
+              <label class="sr-only" for="iac-input">Configuration</label>
+              <textarea id="iac-input" wrap="off" spellcheck="false" autocapitalize="off" autocomplete="off"
+                placeholder="resource &quot;aws_s3_bucket&quot; &quot;logs&quot; {&#10;  bucket = &quot;acme-app-logs&quot;&#10;}"></textarea>
+            </div>
           </div>
-          <div class="editor-foot">
-            <span class="hint" id="usage-hint"><kbd>Ctrl</kbd> <kbd>Enter</kbd> to scan</span>
+
+          <div class="source-panel" data-panel-source="zip" hidden>
+            <label class="dropzone" id="zip-dropzone" for="zip-file">
+              <input type="file" id="zip-file" accept=".zip,application/zip">
+              <span class="dropzone-empty">
+                <svg class="icon"><use href="#i-upload"/></svg>
+                <span class="dropzone-title" id="zip-title">Choose a zip or drop it here</span>
+                <span class="dropzone-sub" id="zip-sub">Terraform, CloudFormation, Kubernetes, Compose and Dockerfiles inside are scanned. Up to 10 MB.</span>
+              </span>
+            </label>
+          </div>
+
+          <div class="source-panel repo-panel" data-panel-source="github" hidden>
+            <label class="field-label" for="repo-url">Repository or folder link</label>
+            <input class="text-field" id="repo-url" type="url" spellcheck="false" autocomplete="off"
+              placeholder="https://github.com/owner/repo/tree/main/infra">
+            <p class="field-help">Public repositories only. Link to a folder to scan part of a repository. Branch names containing a slash aren't supported in folder links.</p>
+            <p class="field-help">Try it with <button class="link-btn inline" type="button" data-repo="https://github.com/bridgecrewio/terragoat/tree/master/terraform/aws">terragoat</button>, a deliberately vulnerable Terraform project.</p>
+          </div>
+
+          <div class="scan-bar">
+            <span class="hint" id="usage-hint"></span>
             <button class="btn btn-primary" id="btn-scan" type="button" title="Scan (Ctrl+Enter)">Scan</button>
           </div>
         </div>
@@ -182,7 +210,7 @@
         <ol class="walkthrough">
           <li>
             <h3>Checkov runs the policies</h3>
-            <p><a href="https://www.checkov.io/">Checkov</a> is an open-source analyzer with over 1,000 policies for Terraform, CloudFormation, Kubernetes, Helm and Dockerfiles. It reports each resource that fails a policy, with the file and lines involved. The same file always gives the same findings.</p>
+            <p>You can paste one file, upload a zip, or link a public GitHub repository or folder. Configuration files are picked out (Terraform, CloudFormation, Kubernetes, Helm, Compose, Dockerfiles) and everything else is ignored. <a href="https://www.checkov.io/">Checkov</a>, an open-source analyzer with over 1,000 policies, then reports each resource that fails a policy, with the file and lines involved. The same files always give the same findings.</p>
           </li>
           <li>
             <h3>The findings get explained</h3>
@@ -190,11 +218,11 @@
           </li>
           <li>
             <h3>Earlier fixes are checked</h3>
-            <p>Findings are compared with findings from your own earlier scans using embeddings stored in PostgreSQL with pgvector. The closest matches and the patches written for them are used as examples, which keeps fixes consistent between files. Only your scans are searched.</p>
+            <p>Findings are turned into embeddings by a small open model (bge-small) that runs on this server, and compared with findings from your own earlier scans stored in PostgreSQL with pgvector. The closest matches and the patches written for them are used as examples, which keeps fixes consistent between files. Only your scans are searched.</p>
           </li>
           <li>
             <h3>A patch is written</h3>
-            <p>The model rewrites the file with the findings addressed and marks changed lines with a <code># FIXED:</code> comment. The page shows it as a diff against what you pasted.</p>
+            <p>The model rewrites each file with its findings addressed and marks changed lines with a <code># FIXED:</code> comment. The page shows each patch as a diff against the original. For projects, the files with the most serious findings are patched first.</p>
           </li>
           <li>
             <h3>The scan is saved</h3>
@@ -226,7 +254,8 @@
           <li>There are no accounts. The first time you visit, your browser gets a random ID in a cookie, and every scan you run is filed under it. Nobody else can list, open or search your scans, and they're never used as examples for anyone else's patch.</li>
           <li>Because history belongs to the cookie, it won't follow you to another device. Clearing your cookies loses access to it.</li>
           <li><strong>Clear history</strong> deletes your scans and findings from the database. The file copies in S3 aren't linked to your browser and aren't shown to anyone.</li>
-          <li>Checkov runs on this server. For explained scans, the file is also processed by Groq, and embeddings of the findings by Google. Don't paste real passwords or keys; swap them for placeholders first.</li>
+          <li>Checkov and the embedding model run on this server. For explained scans, the files are also processed by Groq, and diagrams by Google. Don't include real passwords or keys; swap them for placeholders first.</li>
+          <li>Repositories are downloaded from GitHub for the scan and not kept, apart from the files saved with your scan.</li>
           <li>The free-scan counter stores a keyed hash of your IP address, not the address itself.</li>
         </ul>
 
@@ -235,7 +264,8 @@
           <li>Checkov only knows the policies it ships with. Passing every policy doesn't mean a file is secure.</li>
           <li>Explanations and review findings come from a language model. They can be wrong or miss things, which is why they never change the score.</li>
           <li>Read a patch before applying it and run <code>terraform plan</code>. A rewrite can change more than the lines it marks.</li>
-          <li>Files can be up to 120,000 characters. Diagrams can be up to 8&nbsp;MB. Scans are rate limited per IP address.</li>
+          <li>Pasted files can be up to 120,000 characters. Zips can be up to 10&nbsp;MB and repositories up to 25&nbsp;MB compressed, with at most 400 configuration files. Diagrams can be up to 8&nbsp;MB. Scans are rate limited per IP address.</li>
+          <li>The free explanation model has a small per-minute allowance shared by every visitor. Large projects get explanations for the files with the most serious findings, and patches for up to three files. When the model is busy, the scan shows Checkov results and says so.</li>
         </ul>
 
         <h2>API</h2>

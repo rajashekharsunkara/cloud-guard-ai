@@ -104,7 +104,7 @@ async def test_vector_similarity_search(test_session_factory):
             vulnerability_type="S3 Exposure A",
             severity="CRITICAL",
             description="Vector A bucket",
-            embedding=[0.5] * 768,
+            embedding=[0.5] * 384,
         )
         await db_service.save_vulnerability(
             audit_id="sim_test",
@@ -113,7 +113,7 @@ async def test_vector_similarity_search(test_session_factory):
             vulnerability_type="S3 Exposure B",
             severity="LOW",
             description="Vector B bucket",
-            embedding=[-0.5] * 768,
+            embedding=[-0.5] * 384,
         )
         # Same vector in another workspace must never show up.
         await db_service.save_vulnerability(
@@ -123,10 +123,10 @@ async def test_vector_similarity_search(test_session_factory):
             vulnerability_type="Someone else's finding",
             severity="HIGH",
             description="Vector A bucket",
-            embedding=[0.5] * 768,
+            embedding=[0.5] * 384,
         )
 
-        results = await db_service.search_similar([0.49] * 768, WORKSPACE_A, limit=100)
+        results = await db_service.search_similar([0.49] * 384, WORKSPACE_A, limit=100)
 
         assert all(r["audit_id"] != "sim_other" for r in results)
         sim_results = [r for r in results if r["audit_id"] == "sim_test"]
@@ -138,6 +138,6 @@ async def test_vector_similarity_search(test_session_factory):
         assert sim_results[1]["similarity_score"] < 0.0
 
         await db_service.clear_workspace(WORKSPACE_A)
-        assert await db_service.search_similar([0.49] * 768, WORKSPACE_A) == []
+        assert await db_service.search_similar([0.49] * 384, WORKSPACE_A) == []
 
         await _cleanup(session, "sim_test", "sim_other")

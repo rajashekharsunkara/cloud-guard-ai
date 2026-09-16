@@ -200,3 +200,52 @@ class TestAPIIntegration:
             assert data[0]["severity_counts"] == {"HIGH": 1}
         finally:
             app.dependency_overrides.clear()
+
+    def _override_db(self):
+        async def override_get_db():
+            yield AsyncMock()
+
+        app.dependency_overrides[get_db] = override_get_db
+
+    def test_archive_rejects_bad_zip_before_streaming(self):
+        self._override_db()
+        try:
+            response = client.post(
+                "/api/audit/archive",
+                files={"archive": ("x.zip", b"not a zip", "application/zip")},
+            )
+            assert response.status_code == 400
+            assert "valid zip" in response.json()["detail"]
+        finally:
+            app.dependency_overrides.clear()
+
+    def test_repo_rejects_bad_url_before_streaming(self):
+        self._override_db()
+        try:
+            response = client.post(
+                "/api/audit/repo", json={"url": "https://gitlab.com/a/b"}
+            )
+            assert response.status_code == 400
+            assert "GitHub link" in response.json()["detail"]
+        finally:
+            app.dependency_overrides.clear()
+
+    @patch("backend.app.routers.auditor.download_repo")
+    def test_repo_download_error_is_streamed(self, mock_download):
+        from backend.app.services.sources import SourceError
+
+        mock_download.side_effect = SourceError("Repository or branch not found.")
+        self._override_db()
+        try:
+            response = client.post(
+                "/api/audit/repo", json={"url": "https://github.com/org/missing"}
+            )
+            assert response.status_code == 200
+            events = [
+                line for line in response.text.splitlines() if line.startswith("data: ")
+            ]
+            assert '"step": "fetch", "status": "running"' in events[0]
+            assert "Repository or branch not found." in events[-1]
+            assert '"step": "error"' in events[-1]
+        finally:
+            app.dependency_overrides.clear()

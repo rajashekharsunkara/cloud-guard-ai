@@ -161,7 +161,7 @@ class TestPromptLoading:
 
         content = _load_prompt("review_findings.txt")
         rendered = content.format(
-            file_name="main.tf", iac_content="resource {}", findings="[1] x"
+            files="File: main.tf\n---\nresource {}\n---", findings="[1] x"
         )
         assert "resource {}" in rendered
         assert '{"explanations": [{"ref": 1' in rendered

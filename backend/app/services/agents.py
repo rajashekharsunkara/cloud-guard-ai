@@ -5,10 +5,11 @@ from functools import lru_cache
 from pathlib import Path
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_groq import ChatGroq
 
 from backend.app.core.config import settings
+from backend.app.services import embeddings
 
 logger = logging.getLogger("cloudguard.agents")
 
@@ -16,8 +17,6 @@ PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
 AUDITOR_MODEL = "openai/gpt-oss-120b"
 VISION_MODEL = "gemini-2.5-flash"
-EMBEDDING_MODEL = "models/gemini-embedding-2"
-EMBEDDING_DIM = 768
 
 
 @lru_cache(maxsize=None)
@@ -46,6 +45,9 @@ def _get_groq_llm(json_mode: bool = False) -> ChatGroq:
         # on top of a full rewritten configuration.
         max_tokens=16384,
         reasoning_effort="medium",
+        # Groq's rate-limit responses say when to retry; waiting a little is
+        # better than dropping the explanation.
+        max_retries=3,
         model_kwargs=extra,
     )
 
@@ -58,22 +60,10 @@ def _get_gemini_llm() -> ChatGoogleGenerativeAI:
     )
 
 
-def _get_embedding_model() -> GoogleGenerativeAIEmbeddings:
-    return GoogleGenerativeAIEmbeddings(
-        google_api_key=settings.gemini_api_key,
-        model=EMBEDDING_MODEL,
-        output_dimensionality=EMBEDDING_DIM,
-    )
-
-
 async def generate_embedding(text: str) -> list[float]:
-    model = _get_embedding_model()
-    return await model.aembed_query(text)
+    return await embeddings.embed_query(text)
 
 
-# Explaining more findings than this makes the answer long and slow; the rest
-# keep Checkov's own wording.
-MAX_EXPLAINED_FINDINGS = 60
 SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
 
 
@@ -98,12 +88,46 @@ def _parse_json_object(content: str) -> dict:
     return parsed
 
 
-def _clean_additional(items) -> list[dict]:
+def select_review_files(
+    files: dict[str, str], findings: list[dict], budget: int = None
+) -> tuple[dict[str, str], list[str]]:
+    """Pick files for the review prompt within the size budget.
+
+    Files with the most serious findings go first, then the rest in path
+    order. Returns (included files, paths left out).
+    """
+    budget = settings.llm_review_max_chars if budget is None else budget
+    worst = {}
+    for f in findings:
+        rank = SEVERITY_ORDER.get(f.get("severity"), 4)
+        path = f.get("file")
+        if path in files:
+            worst[path] = min(rank, worst.get(path, 4))
+    order = sorted(files, key=lambda p: (worst.get(p, 5), p))
+
+    included, left_out, used = {}, [], 0
+    for path in order:
+        if used + len(files[path]) > budget:
+            left_out.append(path)
+            continue
+        included[path] = files[path]
+        used += len(files[path])
+    return included, left_out
+
+
+def _format_files(files: dict[str, str]) -> str:
+    return "\n".join(
+        f"File: {path}\n---\n{content}\n---\n" for path, content in files.items()
+    )
+
+
+def _clean_additional(items, paths) -> list[dict]:
     cleaned = []
     for item in items if isinstance(items, list) else []:
         if not isinstance(item, dict) or not item.get("title"):
             continue
         severity = str(item.get("severity", "MEDIUM")).upper()
+        file_path = str(item.get("file", ""))
         cleaned.append(
             {
                 "source": "review",
@@ -113,25 +137,26 @@ def _clean_additional(items) -> list[dict]:
                 "description": str(item.get("description", "")),
                 "remediation": str(item.get("remediation", "")),
                 "resource": str(item.get("resource", "")),
+                "file": file_path if file_path in paths else "",
             }
         )
     return cleaned
 
 
 async def review_findings(
-    iac_content: str, file_name: str, findings: list[dict]
+    files: dict[str, str], findings: list[dict]
 ) -> tuple[list[dict], list[dict]]:
     """Explain Checkov findings and look for problems it can't detect.
 
+    ``files`` should already fit the prompt budget (see select_review_files).
     Returns (findings with description/remediation filled in where the model
     explained them, additional findings from the review).
     """
     ranked = sorted(findings, key=lambda f: SEVERITY_ORDER.get(f["severity"], 4))
-    to_explain = ranked[:MAX_EXPLAINED_FINDINGS]
+    to_explain = ranked[: settings.llm_max_explained_findings]
 
     prompt = _load_prompt("review_findings.txt").format(
-        file_name=file_name,
-        iac_content=iac_content,
+        files=_format_files(files),
         findings=_format_findings(to_explain),
     )
     llm = _get_groq_llm(json_mode=True)
@@ -154,7 +179,7 @@ async def review_findings(
             explained[ref - 1]["description"] = str(item.get("description", ""))
             explained[ref - 1]["remediation"] = str(item.get("remediation", ""))
 
-    additional = _clean_additional(parsed.get("additional"))
+    additional = _clean_additional(parsed.get("additional"), set(files))
     logger.info(
         "review explained %d of %d findings, added %d",
         sum(1 for f in explained if f["description"]),
@@ -168,6 +193,7 @@ async def run_patch_generation(
     iac_content: str,
     vulnerabilities: list[dict],
     similar_patches: list[dict],
+    file_name: str = "main.tf",
 ) -> str:
     logger.info("generating patched code with %d RAG patches", len(similar_patches))
     llm = _get_groq_llm()
@@ -182,6 +208,7 @@ async def run_patch_generation(
         )
 
     prompt = _load_prompt("patch_generator.txt").format(
+        file_name=file_name,
         iac_content=iac_content,
         vulnerabilities=json.dumps(vulnerabilities, indent=2),
         similar_patches=patches_context,
@@ -233,7 +260,7 @@ async def find_similar_patches(
         return []
     combined = " | ".join(_finding_text(v) for v in vulnerabilities)
     try:
-        query_embedding = await generate_embedding(combined)
+        query_embedding = (await embeddings.embed_documents([combined]))[0]
         return await db_service.search_similar(
             query_embedding, workspace_id, limit=limit
         )
@@ -246,37 +273,37 @@ async def index_findings(
     db_service,
     workspace_id: str,
     audit_id: str,
-    file_name: str,
-    iac_content: str,
-    patched_code: str,
+    label: str,
+    files: dict[str, str],
+    patched_files: dict[str, str],
     findings: list[dict],
 ) -> None:
     """Embed findings for search and patch examples. Best effort."""
     if not findings:
         return
     try:
-        embeddings = await _get_embedding_model().aembed_documents(
-            [_finding_text(f) for f in findings]
-        )
+        vectors = await embeddings.embed_documents([_finding_text(f) for f in findings])
     except Exception:
         logger.warning("embedding failed for audit %s", audit_id, exc_info=True)
         return
 
-    rows = [
-        {
-            "audit_id": audit_id,
-            "workspace_id": workspace_id,
-            "file_name": file_name,
-            "vulnerability_type": f.get("title", "Unknown"),
-            "severity": f.get("severity", "LOW"),
-            "description": f.get("description") or f.get("title", ""),
-            "resource": f.get("resource", ""),
-            "original_code": iac_content[:2000],
-            "patched_code": patched_code[:2000],
-            "embedding": embedding,
-        }
-        for f, embedding in zip(findings, embeddings)
-    ]
+    rows = []
+    for f, embedding in zip(findings, vectors):
+        path = f.get("file") or ""
+        rows.append(
+            {
+                "audit_id": audit_id,
+                "workspace_id": workspace_id,
+                "file_name": path or label,
+                "vulnerability_type": f.get("title", "Unknown"),
+                "severity": f.get("severity", "LOW"),
+                "description": f.get("description") or f.get("title", ""),
+                "resource": f.get("resource", ""),
+                "original_code": files.get(path, "")[:2000],
+                "patched_code": patched_files.get(path, "")[:2000],
+                "embedding": embedding,
+            }
+        )
     try:
         await db_service.save_vulnerabilities(rows)
     except Exception:

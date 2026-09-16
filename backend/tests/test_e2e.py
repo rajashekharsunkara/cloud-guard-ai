@@ -28,12 +28,11 @@ SSH_FINDING = {
 class TestEndToEndWorkflow:
 
     @pytest.mark.asyncio
-    @patch("backend.app.services.agents._get_embedding_model")
     @patch("backend.app.services.agents.run_patch_generation", new_callable=AsyncMock)
     @patch("backend.app.services.agents.review_findings", new_callable=AsyncMock)
     @patch("backend.app.services.pipeline.run_checkov", new_callable=AsyncMock)
     async def test_complete_audit_search_history_flow(
-        self, mock_checkov, mock_review, mock_patch, mock_embedding_model, monkeypatch
+        self, mock_checkov, mock_review, mock_patch, monkeypatch
     ):
         # A fresh salt gives this run its own free-scan counter.
         monkeypatch.setattr(settings, "usage_hash_salt", uuid.uuid4().hex)
@@ -65,12 +64,6 @@ class TestEndToEndWorkflow:
                 [],
             )
             mock_patch.return_value = 'resource "aws_security_group" "web_sg" {\n  # FIXED: restricted port 22\n}'
-            mock_embedding_model.return_value.aembed_documents = AsyncMock(
-                side_effect=lambda texts: [[0.05] * 768 for _ in texts]
-            )
-            mock_embedding_model.return_value.aembed_query = AsyncMock(
-                return_value=[0.05] * 768
-            )
 
             # Run audit
             audit_payload = {

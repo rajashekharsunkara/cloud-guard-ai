@@ -1,6 +1,6 @@
 # CloudGuard
 
-Scans infrastructure code for security issues. [Checkov](https://www.checkov.io/) finds the problems and decides the score, so results are the same on every run; an LLM (gpt-oss-120b on Groq) then explains each finding for the specific file, flags issues no policy covers, and writes a patched version. Gemini handles embeddings and architecture diagram checks, and pgvector retrieves earlier fixes as examples.
+Scans infrastructure code for security issues: a pasted file, a zip, or a public GitHub repository. [Checkov](https://www.checkov.io/) finds the problems and decides the score, so results are the same on every run; an LLM (gpt-oss-120b on Groq) then explains each finding, flags issues no policy covers, and writes patched files. A local embedding model (bge-small via fastembed) and pgvector retrieve earlier fixes as examples, and Gemini compares architecture diagrams with the code.
 
 Checkov results are free and unlimited. Explained scans use the server's Groq key and are capped per visitor per day.
 
@@ -26,6 +26,8 @@ Dashboard is at `http://localhost:8000`. Swagger at `/docs`. Postgres and a Loca
 | `GET` | `/api/usage` | Free explained scans left today for this client |
 | `POST` | `/api/audit` | Checkov scan, explained and patched when the free tier allows; JSON response |
 | `POST` | `/api/audit/stream` | Same pipeline, streamed as SSE |
+| `POST` | `/api/audit/archive` | Scan a zip upload (multipart field `archive`), streamed as SSE |
+| `POST` | `/api/audit/repo` | Scan a public GitHub repo or folder (`{"url": ...}`), streamed as SSE |
 | `POST` | `/api/audit/diagram` | Audit + architecture diagram drift check |
 | `POST` | `/api/search` | Semantic search over your past findings |
 | `GET` | `/api/history` | Your recent scans |
@@ -40,8 +42,8 @@ Everything is set through environment variables (see `.env.example`):
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `GROQ_API_KEY` | — | required |
-| `GEMINI_API_KEY` | — | required |
+| `GROQ_API_KEY` | — | explained scans and patches; without it scans are Checkov only |
+| `GEMINI_API_KEY` | — | diagram check only |
 | `DATABASE_URL` | local Postgres | any Postgres 15+ with the pgvector extension |
 | `AWS_ENDPOINT_URL` | unset | set to a LocalStack URL for dev; leave unset for real AWS |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | unset | leave empty on AWS to use the IAM role |
@@ -58,6 +60,14 @@ Everything is set through environment variables (see `.env.example`):
 | `USAGE_HASH_SALT` | derived from `DATABASE_URL` | key for hashing client IPs in the usage table |
 | `CHECKOV_BIN` | `checkov` | set by the Docker image; point at a checkov install for local runs |
 | `CHECKOV_TIMEOUT` | `90` | seconds before a scan is stopped |
+| `LLM_REVIEW_MAX_CHARS` | `16000` | file content sent for explanations; files with worse findings go first |
+| `LLM_MAX_EXPLAINED_FINDINGS` | `25` | findings explained per scan |
+| `LLM_MAX_PATCHED_FILES` | `3` | files patched per scan |
+| `LLM_PATCH_MAX_FILE_CHARS` | `12000` | larger files aren't rewritten |
+| `LLM_PATCH_CONCURRENCY` | `1` | patch requests in parallel |
+| `EMBEDDING_CACHE_DIR` | set by the image | where the local embedding model lives |
+
+The `LLM_*` defaults fit Groq's free tier, which allows 8,000 tokens per minute for gpt-oss-120b across all visitors. On that tier an explained scan of a large project takes a few minutes, and concurrent explained scans will hit the limit; the app then falls back to Checkov results and says so. A paid Groq tier lifts the limit, after which these values can be raised.
 
 ## Deploying to AWS
 

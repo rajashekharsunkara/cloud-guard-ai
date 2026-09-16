@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import uuid
 from dataclasses import dataclass
@@ -6,13 +7,14 @@ from typing import AsyncIterator, Optional
 
 from backend.app.core.config import settings
 from backend.app.services import agents
-from backend.app.services.checkov import ScannerError, run_checkov
+from backend.app.services.checkov import ScannerError, run_checkov, safe_relative_path
 from backend.app.services.severity import score_findings
 from backend.app.services.storage import StorageService
 
 logger = logging.getLogger("cloudguard.pipeline")
 
 SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+MAX_DIAGRAM_CONTEXT_CHARS = 60_000
 
 
 class ScanFailed(Exception):
@@ -21,10 +23,23 @@ class ScanFailed(Exception):
 
 @dataclass
 class ScanInput:
-    iac_content: str
-    file_name: str
+    files: dict[str, str]
+    label: str
+    source: str = "paste"
     image_bytes: Optional[bytes] = None
     image_type: str = "image/png"
+
+    @classmethod
+    def single(cls, content: str, file_name: str, **kwargs) -> "ScanInput":
+        try:
+            path = str(safe_relative_path(file_name))
+        except ValueError:
+            path = "main.tf"
+        return cls(files={path: content}, label=file_name, **kwargs)
+
+    @property
+    def single_path(self) -> Optional[str]:
+        return next(iter(self.files)) if len(self.files) == 1 else None
 
 
 def event(step: str, status: str, message: str = None, data=None) -> dict:
@@ -40,12 +55,45 @@ def _by_severity(findings: list[dict]) -> list[dict]:
     return sorted(findings, key=lambda f: SEVERITY_ORDER.get(f.get("severity"), 4))
 
 
-def _plural(n: int, word: str) -> str:
-    return f"{n} {word}{'' if n == 1 else 's'}"
+def _plural(n: int, word: str, many: str = None) -> str:
+    return f"{n} {word if n == 1 else (many or word + 's')}"
+
+
+def is_rate_limited(error: Exception) -> bool:
+    """True when a provider refused the call for quota rather than failing."""
+    status = getattr(error, "status_code", None)
+    text = str(error).lower()
+    return status in (413, 429) and (
+        "rate_limit" in text or "rate limit" in text or status == 429
+    )
+
+
+BUSY_NOTICE = (
+    "The explanation model is at its per-minute limit right now, because the free "
+    "tier is shared by everyone using this site. The Checkov results are complete; "
+    "scan again in a minute for explanations and patches. This didn't use a free scan."
+)
+
+
+def files_to_patch(files: dict[str, str], findings: list[dict]) -> list[str]:
+    """Files with findings, most serious first, within the patch budget.
+
+    Each patch is a full rewrite of one file, so only files small enough to
+    rewrite are considered and larger projects get patches for the files with
+    the most serious findings.
+    """
+    worst = {}
+    for f in findings:
+        path = f.get("file")
+        if path in files and len(files[path]) <= settings.llm_patch_max_file_chars:
+            rank = SEVERITY_ORDER.get(f.get("severity"), 4)
+            worst[path] = min(rank, worst.get(path, 4))
+    ranked = sorted(worst, key=lambda p: (worst[p], p))
+    return ranked[: settings.llm_max_patched_files]
 
 
 class Scan:
-    """One scan: Checkov first, then explanations and a patch when allowed."""
+    """One scan: Checkov first, then explanations and patches when allowed."""
 
     def __init__(self, scan_input: ScanInput, db_service, quota, workspace_id: str):
         self.input = scan_input
@@ -59,7 +107,7 @@ class Scan:
         self.findings: list[dict] = []
         self.additional: list[dict] = []
         self.similar: list[dict] = []
-        self.patched_code = ""
+        self.patches: list[dict] = []
         self.diagram_analysis: Optional[str] = None
         self.checkov_version = ""
         self.covered_files: list[str] = []
@@ -74,7 +122,8 @@ class Scan:
                 yield item
         elif self.input.image_bytes:
             self.notices.append(
-                "The diagram wasn't compared because explanations aren't available for this scan."
+                "The diagram wasn't compared because explanations aren't available "
+                "for this scan."
             )
 
         if not self.covered_files:
@@ -87,9 +136,18 @@ class Scan:
         yield event("done", "complete", data=result)
 
     async def _static_checks(self) -> AsyncIterator[dict]:
-        yield event("static_checks", "running", "Running Checkov...")
+        count = len(self.input.files)
+        yield event(
+            "static_checks",
+            "running",
+            (
+                "Running Checkov..."
+                if count == 1
+                else f"Running Checkov on {count} files..."
+            ),
+        )
         try:
-            report = await run_checkov({self.input.file_name: self.input.iac_content})
+            report = await run_checkov(self.input.files)
         except ScannerError as e:
             raise ScanFailed(str(e)) from e
 
@@ -123,20 +181,34 @@ class Scan:
 
     async def _model_steps(self) -> AsyncIterator[dict]:
         yield event("review", "running", "Explaining findings...")
+        review_files, left_out = agents.select_review_files(
+            self.input.files, self.findings
+        )
         try:
             self.findings, self.additional = await agents.review_findings(
-                self.input.iac_content, self.input.file_name, self.findings
+                review_files, self.findings
             )
-        except Exception:
+        except Exception as error:
             logger.warning("review failed for audit %s", self.audit_id, exc_info=True)
             await self.quota.refund()
             self.mode = "static"
             self.notices.append(
-                "Explanations couldn't be generated for this scan. "
+                BUSY_NOTICE
+                if is_rate_limited(error)
+                else "Explanations couldn't be generated for this scan. "
                 "The Checkov results are still complete."
             )
             yield event("review", "error", "Explanations unavailable")
             return
+        if self.input.single_path:
+            # With one file there's no doubt which file a review finding is about.
+            for finding in self.additional:
+                finding["file"] = finding.get("file") or self.input.single_path
+        if left_out:
+            self.notices.append(
+                f"{_plural(len(left_out), 'file')} didn't fit in the review, so "
+                "some findings aren't explained. Their Checkov results are listed."
+            )
         yield event("review", "complete", self._review_message())
 
         if self.findings or self.additional:
@@ -152,35 +224,93 @@ class Scan:
         return "Explained"
 
     async def _patch(self) -> AsyncIterator[dict]:
+        all_findings = self.findings + self.additional
         yield event("rag_retrieval", "running", "Checking your earlier fixes...")
         self.similar = await agents.find_similar_patches(
-            self.db, self.workspace_id, self.findings + self.additional
+            self.db, self.workspace_id, all_findings
         )
         yield event(
             "rag_retrieval",
             "complete",
-            f"{len(self.similar)} related {'fix' if len(self.similar) == 1 else 'fixes'} from earlier scans",
+            f"{_plural(len(self.similar), 'related fix', 'related fixes')} from earlier scans",
         )
 
-        yield event("patch_generation", "running", "Writing a patch...")
-        try:
-            self.patched_code = await agents.run_patch_generation(
-                self.input.iac_content,
-                [_patch_context(f) for f in self.findings + self.additional],
-                self.similar,
+        targets = files_to_patch(self.input.files, all_findings)
+        if not targets:
+            return
+        yield event(
+            "patch_generation",
+            "running",
+            (
+                "Writing a patch..."
+                if len(targets) == 1
+                else f"Patching {len(targets)} files..."
+            ),
+        )
+        self.patches = await self._write_patches(targets, all_findings)
+
+        failed = len(targets) - len(self.patches)
+        if failed:
+            self.notices.append(
+                "A patch couldn't be written for this scan."
+                if len(targets) == 1
+                else f"Patches couldn't be written for {_plural(failed, 'file')}."
             )
-        except Exception:
-            logger.warning("patch failed for audit %s", self.audit_id, exc_info=True)
-            self.notices.append("A patch couldn't be written for this scan.")
+        with_findings = {f.get("file") for f in all_findings} & set(self.input.files)
+        skipped = len(with_findings) - len(targets)
+        if skipped > 0:
+            self.notices.append(
+                f"{_plural(skipped, 'file')} with findings "
+                f"{'was' if skipped == 1 else 'were'}n't patched. Patches "
+                f"cover up to {settings.llm_max_patched_files} files per scan, and "
+                "files too large to rewrite in one go are skipped."
+            )
+        if not self.patches:
             yield event("patch_generation", "error", "Patch unavailable")
             return
-        yield event("patch_generation", "complete", "Patch written")
+        yield event("patch_generation", "complete", self._patch_message())
+
+    def _patch_message(self) -> str:
+        if self.input.single_path:
+            return "Patch written"
+        return f"{_plural(len(self.patches), 'file')} patched"
+
+    async def _write_patches(
+        self, targets: list[str], findings: list[dict]
+    ) -> list[dict]:
+        limit = asyncio.Semaphore(settings.llm_patch_concurrency)
+
+        async def patch_one(path: str) -> Optional[dict]:
+            context = [_patch_context(f) for f in findings if f.get("file") == path]
+            async with limit:
+                try:
+                    patched = await agents.run_patch_generation(
+                        self.input.files[path], context, self.similar, file_name=path
+                    )
+                except Exception:
+                    logger.warning(
+                        "patch failed for %s in audit %s",
+                        path,
+                        self.audit_id,
+                        exc_info=True,
+                    )
+                    return None
+            if not patched.strip():
+                return None
+            return {
+                "file": path,
+                "original": self.input.files[path],
+                "patched": patched,
+            }
+
+        results = await asyncio.gather(*(patch_one(p) for p in targets))
+        return [r for r in results if r]
 
     async def _diagram(self) -> AsyncIterator[dict]:
         yield event("diagram", "running", "Comparing the diagram...")
         try:
             self.diagram_analysis = await agents.run_diagram_analysis(
-                self.input.iac_content, self.input.image_bytes, self.input.image_type
+                self._diagram_context(), self.input.image_bytes, self.input.image_type
             )
         except Exception:
             logger.warning("diagram failed for audit %s", self.audit_id, exc_info=True)
@@ -189,10 +319,24 @@ class Scan:
             return
         yield event("diagram", "complete", "Compared")
 
+    def _diagram_context(self) -> str:
+        if self.input.single_path:
+            return self.input.files[self.input.single_path]
+        parts, used = [], 0
+        for path in sorted(self.input.files):
+            chunk = f"# File: {path}\n{self.input.files[path]}\n"
+            if used + len(chunk) > MAX_DIAGRAM_CONTEXT_CHARS:
+                break
+            parts.append(chunk)
+            used += len(chunk)
+        return "\n".join(parts)
+
     def _coverage_notice(self) -> str:
         notice = (
             "Checkov doesn't support this file type (Docker Compose, for example), "
             "so there's no score."
+            if self.input.single_path
+            else "None of these files are types Checkov supports, so there's no score."
         )
         if self.mode == "free":
             return notice + " The findings come from the review alone."
@@ -207,16 +351,23 @@ class Scan:
         return score_findings([f for f in self.findings if f.get("file") in covered])
 
     async def _result(self) -> dict:
+        single = self.input.single_path
         return {
             "audit_id": self.audit_id,
-            "file_name": self.input.file_name,
+            "file_name": self.input.label,
             "security_score": self._score(),
             "vulnerabilities": self.findings + _by_severity(self.additional),
-            "patched_code": self.patched_code,
+            "files": sorted(self.input.files),
+            "patches": self.patches,
+            # Kept for single-file API clients.
+            "patched_code": (
+                self.patches[0]["patched"] if single and self.patches else ""
+            ),
             "similar_past_audits": [p.get("description", "") for p in self.similar],
             "diagram_analysis": self.diagram_analysis,
             "analysis": {
                 "mode": self.mode,
+                "source": self.input.source,
                 "checkov_version": self.checkov_version,
                 "covered_files": self.covered_files,
                 "frameworks": self.frameworks,
@@ -226,29 +377,30 @@ class Scan:
         }
 
     async def _persist(self, result: dict) -> None:
+        single = self.input.single_path
         await self.db.save_audit(
             audit_id=self.audit_id,
             workspace_id=self.workspace_id,
-            file_name=self.input.file_name,
+            file_name=self.input.label,
             security_score=result["security_score"],
             findings=result["vulnerabilities"],
-            original_code=self.input.iac_content,
-            patched_code=self.patched_code,
+            original_code=self.input.files[single] if single else "",
+            patched_code=result["patched_code"],
             diagram_analysis=self.diagram_analysis,
             analysis=result["analysis"],
+            files=result["files"],
+            patches=self.patches,
         )
         await agents.index_findings(
             self.db,
             self.workspace_id,
             self.audit_id,
-            self.input.file_name,
-            self.input.iac_content,
-            self.patched_code,
+            self.input.label,
+            self.input.files,
+            {p["file"]: p["patched"] for p in self.patches},
             result["vulnerabilities"],
         )
-        await asyncio.to_thread(
-            upload_artifacts, self.input.iac_content, self.input.file_name, result
-        )
+        await asyncio.to_thread(upload_artifacts, self.input, result)
 
 
 def _patch_context(finding: dict) -> dict:
@@ -256,16 +408,28 @@ def _patch_context(finding: dict) -> dict:
     return {k: finding.get(k) for k in keys if finding.get(k)}
 
 
-def upload_artifacts(iac_content: str, file_name: str, result: dict) -> None:
-    """Store the original and patched configs in S3. Best effort."""
+def upload_artifacts(scan_input: ScanInput, result: dict) -> None:
+    """Store the scanned and patched files in S3. Best effort."""
     try:
         storage = StorageService()
+        single = scan_input.single_path
+        if single:
+            original = scan_input.files[single]
+            name = scan_input.label
+        else:
+            original = json.dumps(scan_input.files)
+            name = f"{scan_input.label}.json"
         original_key = storage.upload_file(
-            content=iac_content, file_name=file_name, unique_id=result["audit_id"]
+            content=original, file_name=name, unique_id=result["audit_id"]
         )
-        if result.get("patched_code"):
+        if result.get("patches"):
+            patched = (
+                result["patches"][0]["patched"]
+                if single
+                else json.dumps({p["file"]: p["patched"] for p in result["patches"]})
+            )
             storage.upload_patched_file(
-                original_key=original_key, patched_content=result["patched_code"]
+                original_key=original_key, patched_content=patched
             )
     except Exception:
         logger.exception("S3 upload failed for audit %s", result.get("audit_id"))

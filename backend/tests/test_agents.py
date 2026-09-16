@@ -4,17 +4,20 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from langchain_core.messages import AIMessage
 
+from backend.app.core.config import settings
 from backend.app.services.agents import (
-    MAX_EXPLAINED_FINDINGS,
     AuditError,
     index_findings,
     review_findings,
     run_diagram_analysis,
     run_patch_generation,
+    select_review_files,
 )
 
 
-def finding(check_id, severity, title="Check", resource="aws_s3_bucket.a"):
+def finding(
+    check_id, severity, title="Check", resource="aws_s3_bucket.a", file="main.tf"
+):
     return {
         "source": "checkov",
         "check_id": check_id,
@@ -23,7 +26,7 @@ def finding(check_id, severity, title="Check", resource="aws_s3_bucket.a"):
         "description": "",
         "remediation": "",
         "resource": resource,
-        "file": "main.tf",
+        "file": file,
         "line_start": 1,
         "line_end": 4,
     }
@@ -70,7 +73,7 @@ class TestReviewFindings:
             ),
         )
 
-        explained, additional = await review_findings("code", "main.tf", findings)
+        explained, additional = await review_findings({"main.tf": "code"}, findings)
 
         assert [f["check_id"] for f in explained] == ["CKV_AWS_20", "CKV_AWS_21"]
         assert explained[0]["description"] == "Anyone can list it"
@@ -79,6 +82,7 @@ class TestReviewFindings:
         mock_get_llm.assert_called_once_with(json_mode=True)
         prompt = llm.ainvoke.call_args.args[0][1].content
         assert "[1] CKV_AWS_20 (CRITICAL)" in prompt
+        assert "File: main.tf\n---\ncode\n---" in prompt
 
     @pytest.mark.asyncio
     @patch("backend.app.services.agents._get_groq_llm")
@@ -93,6 +97,12 @@ class TestReviewFindings:
                             "severity": "high",
                             "title": "Password in env",
                             "resource": "web",
+                            "file": "docker-compose.yml",
+                        },
+                        {
+                            "severity": "LOW",
+                            "title": "Made-up file",
+                            "file": "../etc/passwd",
                         },
                         {"severity": "EXTREME", "title": "Odd severity"},
                         {"description": "no title, dropped"},
@@ -101,10 +111,11 @@ class TestReviewFindings:
                 }
             ),
         )
-        _, additional = await review_findings("code", "docker-compose.yml", [])
-        assert [(a["title"], a["severity"]) for a in additional] == [
-            ("Password in env", "HIGH"),
-            ("Odd severity", "MEDIUM"),
+        _, additional = await review_findings({"docker-compose.yml": "code"}, [])
+        assert [(a["title"], a["severity"], a["file"]) for a in additional] == [
+            ("Password in env", "HIGH", "docker-compose.yml"),
+            ("Made-up file", "LOW", ""),
+            ("Odd severity", "MEDIUM", ""),
         ]
         assert all(
             a["source"] == "review" and a["check_id"] is None for a in additional
@@ -116,21 +127,38 @@ class TestReviewFindings:
         model_returns(mock_get_llm, "This is not JSON!")
         with pytest.raises(AuditError):
             await review_findings(
-                "code", "main.tf", [finding("CKV_AWS_20", "CRITICAL")]
+                {"main.tf": "code"}, [finding("CKV_AWS_20", "CRITICAL")]
             )
 
     @pytest.mark.asyncio
     @patch("backend.app.services.agents._get_groq_llm")
     async def test_long_lists_are_capped(self, mock_get_llm):
         llm = model_returns(mock_get_llm, '{"explanations": [], "additional": []}')
-        findings = [
-            finding(f"CKV_X_{i}", "LOW") for i in range(MAX_EXPLAINED_FINDINGS + 5)
-        ]
-        explained, _ = await review_findings("code", "main.tf", findings)
+        cap = settings.llm_max_explained_findings
+        findings = [finding(f"CKV_X_{i}", "LOW") for i in range(cap + 5)]
+        explained, _ = await review_findings({"main.tf": "code"}, findings)
         prompt = llm.ainvoke.call_args.args[0][1].content
-        assert f"[{MAX_EXPLAINED_FINDINGS}]" in prompt
-        assert f"[{MAX_EXPLAINED_FINDINGS + 1}]" not in prompt
+        assert f"[{cap}]" in prompt
+        assert f"[{cap + 1}]" not in prompt
         assert len(explained) == len(findings)
+
+
+class TestSelectReviewFiles:
+
+    def test_files_with_serious_findings_go_first(self):
+        files = {"a.tf": "x" * 50, "b.tf": "y" * 50, "c.tf": "z" * 50}
+        findings = [
+            finding("CKV_1", "LOW", file="b.tf"),
+            finding("CKV_2", "CRITICAL", file="c.tf"),
+        ]
+        included, left_out = select_review_files(files, findings, budget=110)
+        assert list(included) == ["c.tf", "b.tf"]
+        assert left_out == ["a.tf"]
+
+    def test_everything_fits(self):
+        included, left_out = select_review_files({"a.tf": "1", "b.tf": "2"}, [])
+        assert set(included) == {"a.tf", "b.tf"}
+        assert left_out == []
 
 
 class TestOtherModelCalls:
@@ -138,13 +166,17 @@ class TestOtherModelCalls:
     @pytest.mark.asyncio
     @patch("backend.app.services.agents._get_groq_llm")
     async def test_patch_generation_strips_fence(self, mock_get_llm):
-        model_returns(mock_get_llm, '```hcl\nresource "x" "y" { acl = "private" }\n```')
+        llm = model_returns(
+            mock_get_llm, '```hcl\nresource "x" "y" { acl = "private" }\n```'
+        )
         result = await run_patch_generation(
             "original",
             [{"title": "Public"}],
             [{"description": "old", "patched_code": "x"}],
+            file_name="modules/s3/main.tf",
         )
         assert result.strip() == 'resource "x" "y" { acl = "private" }'
+        assert "File: modules/s3/main.tf" in llm.ainvoke.call_args.args[0][1].content
 
     @pytest.mark.asyncio
     @patch("backend.app.services.agents._get_gemini_llm")
@@ -158,11 +190,11 @@ class TestOtherModelCalls:
 class TestIndexFindings:
 
     @pytest.mark.asyncio
-    @patch("backend.app.services.agents._get_embedding_model")
-    async def test_batches_embeddings_and_saves_once(self, mock_model):
-        mock_model.return_value.aembed_documents = AsyncMock(
-            return_value=[[0.1] * 768] * 2
-        )
+    @patch(
+        "backend.app.services.agents.embeddings.embed_documents", new_callable=AsyncMock
+    )
+    async def test_batches_embeddings_and_saves_once(self, mock_embed):
+        mock_embed.return_value = [[0.1] * 384] * 2
         db = MagicMock()
         db.save_vulnerabilities = AsyncMock()
 
@@ -170,29 +202,36 @@ class TestIndexFindings:
             db,
             "ws",
             "a1",
-            "main.tf",
-            "code",
-            "patched",
+            "project",
+            {"main.tf": "code"},
+            {"main.tf": "patched"},
             [
                 finding("CKV_AWS_20", "CRITICAL", "Public read"),
-                finding("CKV_AWS_21", "LOW"),
+                finding("CKV_AWS_21", "LOW", file="other.tf"),
             ],
         )
 
-        mock_model.return_value.aembed_documents.assert_awaited_once()
+        mock_embed.assert_awaited_once()
         rows = db.save_vulnerabilities.call_args.args[0]
         assert [r["vulnerability_type"] for r in rows] == ["Public read", "Check"]
         assert rows[0]["workspace_id"] == "ws"
         # Unexplained findings fall back to the title for search.
         assert rows[0]["description"] == "Public read"
+        assert (rows[0]["original_code"], rows[0]["patched_code"]) == (
+            "code",
+            "patched",
+        )
+        assert (rows[1]["file_name"], rows[1]["original_code"]) == ("other.tf", "")
 
     @pytest.mark.asyncio
-    @patch("backend.app.services.agents._get_embedding_model")
-    async def test_embedding_failure_is_not_fatal(self, mock_model):
-        mock_model.return_value.aembed_documents = AsyncMock(
-            side_effect=RuntimeError("quota")
-        )
+    @patch(
+        "backend.app.services.agents.embeddings.embed_documents", new_callable=AsyncMock
+    )
+    async def test_embedding_failure_is_not_fatal(self, mock_embed):
+        mock_embed.side_effect = RuntimeError("model files missing")
         db = MagicMock()
         db.save_vulnerabilities = AsyncMock()
-        await index_findings(db, "ws", "a1", "main.tf", "c", "", [finding("A", "LOW")])
+        await index_findings(
+            db, "ws", "a1", "main.tf", {"main.tf": "c"}, {}, [finding("A", "LOW")]
+        )
         db.save_vulnerabilities.assert_not_called()

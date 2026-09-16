@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.database import Base
+from backend.app.services.embeddings import EMBEDDING_DIM
 
 logger = logging.getLogger("cloudguard.db")
 
@@ -31,6 +32,9 @@ class Audit(Base):
     analysis = Column(JSONB, nullable=True)
     original_code = Column(Text, default="")
     patched_code = Column(Text, default="")
+    # Paths scanned, and [{file, original, patched}] for each patched file.
+    files = Column(JSONB, nullable=True)
+    patches = Column(JSONB, nullable=True)
     diagram_analysis = Column(Text, nullable=True)
     created_at = Column(DateTime, default=_utcnow, index=True)
 
@@ -50,12 +54,25 @@ class Vulnerability(Base):
     resource = Column(String, default="")
     original_code = Column(Text, default="")
     patched_code = Column(Text, default="")
-    embedding = Column(Vector(768))
+    embedding = Column(Vector(EMBEDDING_DIM))
     created_at = Column(DateTime, default=_utcnow)
 
 
 def _iso(value: Optional[datetime]) -> Optional[str]:
     return value.isoformat() if value else None
+
+
+def _legacy_patch(audit: Audit) -> list[dict]:
+    # Scans saved before multi-file support kept one original and one patch.
+    if not audit.patched_code:
+        return []
+    return [
+        {
+            "file": audit.file_name,
+            "original": audit.original_code,
+            "patched": audit.patched_code,
+        }
+    ]
 
 
 class DBService:
@@ -73,6 +90,8 @@ class DBService:
         patched_code: str = "",
         diagram_analysis: Optional[str] = None,
         analysis: Optional[dict] = None,
+        files: Optional[list[str]] = None,
+        patches: Optional[list[dict]] = None,
     ) -> Audit:
         audit = Audit(
             id=audit_id,
@@ -84,6 +103,8 @@ class DBService:
             patched_code=patched_code,
             diagram_analysis=diagram_analysis,
             analysis=analysis,
+            files=files,
+            patches=patches,
         )
         self.session.add(audit)
         await self.session.commit()
@@ -181,6 +202,8 @@ class DBService:
                     "finding_count": len(audit.findings),
                     "severity_counts": dict(counts),
                     "has_diagram": audit.diagram_analysis is not None,
+                    "file_count": len(audit.files) if audit.files else 1,
+                    "source": (audit.analysis or {}).get("source", "paste"),
                     "created_at": _iso(audit.created_at),
                 }
             )
@@ -202,6 +225,8 @@ class DBService:
             "patched_code": audit.patched_code,
             "diagram_analysis": audit.diagram_analysis,
             "analysis": audit.analysis,
+            "files": audit.files or [],
+            "patches": audit.patches or _legacy_patch(audit),
             "created_at": audit.created_at,
         }
 

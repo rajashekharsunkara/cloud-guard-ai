@@ -31,6 +31,7 @@ from backend.app.schemas.auditor import (
     AuditResult,
     AuditSummary,
     HealthResponse,
+    RepoRequest,
     SearchRequest,
     SearchResponse,
     SearchResultItem,
@@ -38,7 +39,21 @@ from backend.app.schemas.auditor import (
 )
 from backend.app.services.agents import generate_embedding
 from backend.app.services.db_service import DBService
-from backend.app.services.pipeline import Scan, ScanFailed, ScanInput, run_to_completion
+from backend.app.services.pipeline import (
+    Scan,
+    ScanFailed,
+    ScanInput,
+    event,
+    run_to_completion,
+)
+from backend.app.services.sources import (
+    MAX_ARCHIVE_BYTES,
+    SourceError,
+    download_repo,
+    load_tarball,
+    load_zip,
+    parse_github_url,
+)
 from backend.app.services.storage import StorageService
 from backend.app.services.usage import FreeQuota
 
@@ -112,7 +127,7 @@ async def audit_iac(
 ):
     """Run Checkov on a configuration, then explain and patch it when allowed."""
     scan = Scan(
-        ScanInput(request.iac_content, request.file_name),
+        ScanInput.single(request.iac_content, request.file_name),
         DBService(db),
         quota,
         workspace_id,
@@ -156,7 +171,12 @@ async def audit_with_diagram(
         )
 
     scan = Scan(
-        ScanInput(iac_content, file_name, image_bytes, diagram.content_type),
+        ScanInput.single(
+            iac_content,
+            file_name,
+            image_bytes=image_bytes,
+            image_type=diagram.content_type,
+        ),
         DBService(db),
         quota,
         workspace_id,
@@ -168,11 +188,32 @@ def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
-async def _stream_scan(scan: Scan):
+def _stream_response(events) -> StreamingResponse:
+    return StreamingResponse(
+        events,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+async def _stream_scan(scan: Scan, fetch=None):
+    """Stream a scan. ``fetch`` optionally loads the files first, inside the slot."""
     try:
         async with scan_slots.acquire():
+            if fetch is not None:
+                yield _sse(event("fetch", "running", "Downloading repository..."))
+                source = await fetch()
+                scan.input.files = source.files
+                scan.input.label = source.label
+                yield _sse(event("fetch", "complete", f"{len(source.files)} files"))
             async for item in scan.run():
                 yield _sse(item)
+    except SourceError as e:
+        yield _sse({"step": "error", "status": "error", "message": str(e)})
     except HTTPException as e:
         yield _sse({"step": "error", "status": "error", "message": e.detail})
     except ScanFailed as e:
@@ -197,20 +238,62 @@ async def audit_stream(
 ):
     """Same as /audit, streamed as Server-Sent Events while each step runs."""
     scan = Scan(
-        ScanInput(request.iac_content, request.file_name),
+        ScanInput.single(request.iac_content, request.file_name),
         DBService(db),
         quota,
         workspace_id,
     )
-    return StreamingResponse(
-        _stream_scan(scan),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
+    return _stream_response(_stream_scan(scan))
+
+
+@router.post("/audit/archive", dependencies=[Depends(scan_rate_limit)])
+async def audit_archive(
+    archive: UploadFile = File(..., description="Zip of the infrastructure code"),
+    db: AsyncSession = Depends(get_db),
+    quota: FreeQuota = Depends(get_quota),
+    workspace_id: str = Depends(get_workspace_id),
+):
+    """Scan every configuration file in a zip. Streamed as Server-Sent Events."""
+    data = await archive.read(MAX_ARCHIVE_BYTES + 1)
+    label = (archive.filename or "upload.zip")[:255]
+    try:
+        source = load_zip(data, label)
+    except SourceError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    scan = Scan(
+        ScanInput(files=source.files, label=source.label, source="zip"),
+        DBService(db),
+        quota,
+        workspace_id,
     )
+    return _stream_response(_stream_scan(scan))
+
+
+@router.post("/audit/repo", dependencies=[Depends(scan_rate_limit)])
+async def audit_repo(
+    request: RepoRequest,
+    db: AsyncSession = Depends(get_db),
+    quota: FreeQuota = Depends(get_quota),
+    workspace_id: str = Depends(get_workspace_id),
+):
+    """Scan a public GitHub repository or folder. Streamed as Server-Sent Events."""
+    try:
+        repo = parse_github_url(request.url)
+    except SourceError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    async def fetch():
+        data = await download_repo(repo)
+        return await asyncio.to_thread(load_tarball, data, repo)
+
+    scan = Scan(
+        ScanInput(files={}, label=repo.label, source="github"),
+        DBService(db),
+        quota,
+        workspace_id,
+    )
+    return _stream_response(_stream_scan(scan, fetch=fetch))
 
 
 @router.post(

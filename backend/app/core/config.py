@@ -61,6 +61,18 @@ class Settings(BaseSettings):
     # derived from DATABASE_URL so counts survive restarts without extra setup.
     usage_hash_salt: str = Field(default="")
 
+    # Model budgets. The defaults fit Groq's free tier, which allows 8,000
+    # tokens per minute for gpt-oss-120b; raise them on a paid tier.
+    llm_review_max_chars: int = Field(default=16_000)
+    llm_max_explained_findings: int = Field(default=25)
+    llm_patch_max_file_chars: int = Field(default=12_000)
+    llm_max_patched_files: int = Field(default=3)
+    llm_patch_concurrency: int = Field(default=1)
+
+    # Local embedding model files; the Docker image bakes them in here.
+    embedding_cache_dir: str = Field(default="")
+    embedding_threads: int = Field(default=2)
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

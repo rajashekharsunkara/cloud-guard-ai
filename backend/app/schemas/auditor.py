@@ -47,11 +47,27 @@ class VulnerabilityItem(BaseModel):
     line_end: Optional[int] = None
 
 
+class PatchItem(BaseModel):
+    file: str
+    original: str
+    patched: str
+
+
+class RepoRequest(BaseModel):
+    url: str = Field(
+        ...,
+        max_length=500,
+        description="Public GitHub repository or folder, e.g. "
+        "https://github.com/owner/repo/tree/main/infra",
+    )
+
+
 class ScanAnalysis(BaseModel):
     mode: str = Field(
         default="static",
         description="static: Checkov only; free: explained on the server's free tier",
     )
+    source: str = Field(default="paste", description="paste, zip or github")
     checkov_version: str = ""
     covered_files: list[str] = []
     frameworks: list[str] = []
@@ -76,6 +92,8 @@ class AuditResult(BaseModel):
     similar_past_audits: list[str] = Field(
         default=[], description="Summaries of similar historical vulnerabilities"
     )
+    files: list[str] = Field(default=[], description="Paths that were scanned")
+    patches: list[PatchItem] = []
     analysis: Optional[ScanAnalysis] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -107,6 +125,8 @@ class AuditSummary(BaseModel):
     finding_count: int
     severity_counts: dict[str, int] = {}
     has_diagram: bool = False
+    file_count: int = 1
+    source: str = "paste"
     created_at: Optional[str] = None
 
 
