@@ -29,3 +29,12 @@ def setup_test_s3_bucket():
         ensure_bucket_exists()
     except Exception:
         pass
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limits():
+    from backend.app.core.ratelimit import limiter
+
+    limiter.reset()
+    yield
+    limiter.reset()

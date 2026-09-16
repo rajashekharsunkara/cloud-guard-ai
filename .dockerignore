@@ -16,3 +16,4 @@ terraform/
 README.md
 docker-compose*.yml
 requirements-dev.txt
+deploy/

@@ -46,13 +46,18 @@ Everything is set through environment variables (see `.env.example`):
 | `S3_BUCKET_NAME` | `cloudguard-artifacts` | must be globally unique on real AWS |
 | `APP_ENV` | `development` | set `production` to reduce log noise and hide error details |
 | `CORS_ORIGINS` | `*` | comma-separated; lock down in production |
+| `SCAN_RATE_LIMIT` | `8` | scans per client IP per 10 minutes |
+| `SEARCH_RATE_LIMIT` | `30` | searches per client IP per minute |
+| `MAX_CONCURRENT_SCANS` | `2` | scans running at once; others wait up to 30s, then get a 503 |
+| `FORWARDED_ALLOW_IPS` | `127.0.0.1` | proxies trusted to set `X-Forwarded-For`; the prod compose file trusts the Docker bridge |
+| `BACKUP_INTERVAL_SECONDS` | `86400` | prod compose only; how often the database is dumped to S3 |
 
 ## Deploying to AWS
 
 The simplest setup is a single EC2 instance with Docker, using RDS-style managed Postgres or the bundled Postgres container, and a real S3 bucket.
 
 1. **Instance**: t3.small or larger, Amazon Linux 2023 or Ubuntu, Docker + the compose plugin installed. Open ports 80/443 (behind a load balancer or reverse proxy) — don't expose 5432.
-2. **IAM role**: attach an instance profile allowing `s3:CreateBucket`, `s3:HeadBucket`, `s3:PutObject`, `s3:GetObject`, `s3:ListBucket` on your artifacts bucket. Then no AWS keys go in `.env` at all.
+2. **IAM role**: attach an instance profile allowing `s3:CreateBucket`, `s3:HeadBucket`, `s3:PutObject`, `s3:GetObject`, `s3:ListBucket` on your artifacts bucket. Then no AWS keys go in `.env` at all. Containers reach the role through instance metadata, so the instance's metadata hop limit must be at least 2 (`aws ec2 modify-instance-metadata-options --http-put-response-hop-limit 2`).
 3. **Environment**: copy `.env.example` to `.env` on the host and set:
 
    ```bash
@@ -74,11 +79,31 @@ The simplest setup is a single EC2 instance with Docker, using RDS-style managed
    docker compose -f docker-compose.prod.yml up --build -d
    ```
 
-   The backend listens on 8000; put nginx/Caddy or an ALB in front for TLS. `/api/health` works as the target-group health check.
+   The backend listens on `127.0.0.1:8000` only, so run the TLS proxy on the same host. With Caddy the whole config is:
+
+   ```
+   your-domain.example {
+       reverse_proxy localhost:8000
+   }
+   ```
+
+   `/api/health` works as a health check.
+
+5. **Backups**: the `backup` service dumps the database to `s3://<bucket>/backups/` when it starts and then once a day. Check it with `docker compose -f docker-compose.prod.yml logs backup`. Add an S3 lifecycle rule on the `backups/` prefix (for example, expire after 30 days) so old dumps don't pile up.
+
+   To restore, stop the backend, then load a dump into the database:
+
+   ```bash
+   docker compose -f docker-compose.prod.yml stop backend
+   aws s3 cp s3://<bucket>/backups/cloudguard-<timestamp>.dump restore.dump
+   docker compose -f docker-compose.prod.yml exec -T postgres \
+     pg_restore --clean --if-exists --no-owner -U cloudguard -d cloudguard_db < restore.dump
+   docker compose -f docker-compose.prod.yml start backend
+   ```
 
 To use a managed database instead of the Postgres container, point `DATABASE_URL` at an RDS Postgres instance with the `vector` extension available (RDS supports pgvector on Postgres 15.2+) and drop the `postgres` service from the compose file.
 
-ECS/Fargate works the same way: build the image from the `Dockerfile`, pass the environment above as task definition secrets, and give the task role the S3 permissions.
+ECS/Fargate works the same way: build the image from the `Dockerfile`, pass the environment above as task definition secrets, and give the task role the S3 permissions. Rate limits are kept in memory per process, so behind a load balancer with several tasks each task counts separately.
 
 ## Tests
 

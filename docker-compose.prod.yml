@@ -6,6 +6,9 @@
 # The .env on the host must set APP_ENV=production, real API keys, and
 # leave AWS_ENDPOINT_URL / AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY empty
 # unless you are deliberately using static credentials.
+#
+# The backend only listens on 127.0.0.1; put a TLS proxy (Caddy, nginx) in
+# front of it on the same host.
 
 services:
   postgres:
@@ -32,8 +35,13 @@ services:
     environment:
       APP_ENV: production
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cloudguard}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-cloudguard_db}
+      # A proxy on the host reaches the container through the Docker bridge,
+      # so trust X-Forwarded-For from there to get real client IPs for rate
+      # limiting. Nothing else can connect because the port is bound to
+      # loopback.
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1,172.16.0.0/12}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -43,6 +51,22 @@ services:
       timeout: 5s
       start_period: 15s
       retries: 3
+    restart: always
+
+  backup:
+    build:
+      context: deploy/backup
+    env_file:
+      - .env
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-cloudguard}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB:-cloudguard_db}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: always
 
 volumes:

@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     max_iac_chars: int = 120_000
     max_diagram_bytes: int = 8 * 1024 * 1024
 
+    # Abuse protection, per client IP.
+    scan_rate_limit: int = Field(default=8, description="Scans per 10 minutes")
+    search_rate_limit: int = Field(default=30, description="Searches per minute")
+    max_concurrent_scans: int = Field(default=2, description="Scans running at once")
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

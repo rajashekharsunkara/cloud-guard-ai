@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.config import settings
 from backend.app.core.database import get_db
+from backend.app.core.ratelimit import scan_rate_limit, scan_slots, search_rate_limit
 from backend.app.core.workspace import get_workspace_id
 from backend.app.schemas.auditor import (
     AuditDetail,
@@ -90,19 +91,22 @@ async def health_check(db: AsyncSession = Depends(get_db)):
     )
 
 
-@router.post("/audit", response_model=AuditResult)
+@router.post(
+    "/audit", response_model=AuditResult, dependencies=[Depends(scan_rate_limit)]
+)
 async def audit_iac(
     request: AuditRequest,
     db: AsyncSession = Depends(get_db),
     workspace_id: str = Depends(get_workspace_id),
 ):
     """Run the full audit pipeline on an IaC configuration."""
-    result = await run_full_audit(
-        iac_content=request.iac_content,
-        file_name=request.file_name,
-        db_service=DBService(db),
-        workspace_id=workspace_id,
-    )
+    async with scan_slots.acquire():
+        result = await run_full_audit(
+            iac_content=request.iac_content,
+            file_name=request.file_name,
+            db_service=DBService(db),
+            workspace_id=workspace_id,
+        )
 
     await asyncio.to_thread(
         _upload_audit_artifacts, request.iac_content, request.file_name, result
@@ -120,7 +124,11 @@ async def audit_iac(
     )
 
 
-@router.post("/audit/diagram", response_model=AuditResult)
+@router.post(
+    "/audit/diagram",
+    response_model=AuditResult,
+    dependencies=[Depends(scan_rate_limit)],
+)
 async def audit_with_diagram(
     iac_content: str = Form(...),
     file_name: str = Form(default="main.tf", max_length=255),
@@ -145,14 +153,15 @@ async def audit_with_diagram(
             detail=f"Diagram exceeds {settings.max_diagram_bytes // (1024 * 1024)} MB limit",
         )
 
-    result = await run_full_audit(
-        iac_content=iac_content,
-        file_name=file_name,
-        db_service=DBService(db),
-        workspace_id=workspace_id,
-        image_bytes=image_bytes,
-        image_type=diagram.content_type,
-    )
+    async with scan_slots.acquire():
+        result = await run_full_audit(
+            iac_content=iac_content,
+            file_name=file_name,
+            db_service=DBService(db),
+            workspace_id=workspace_id,
+            image_bytes=image_bytes,
+            image_type=diagram.content_type,
+        )
     return AuditResult(**result)
 
 
@@ -173,54 +182,63 @@ async def _stream_audit_events(
         return f"data: {json.dumps(payload)}\n\n"
 
     try:
-        yield send_event("security_scan", "running", "Reviewing configuration...")
-        vulnerabilities = await run_security_audit(iac_content)
-        yield send_event(
-            "security_scan",
-            "complete",
-            f"{len(vulnerabilities)} findings",
-            vulnerabilities,
-        )
+        async with scan_slots.acquire():
+            yield send_event("security_scan", "running", "Reviewing configuration...")
+            vulnerabilities = await run_security_audit(iac_content)
+            yield send_event(
+                "security_scan",
+                "complete",
+                f"{len(vulnerabilities)} findings",
+                vulnerabilities,
+            )
 
-        yield send_event("rag_retrieval", "running", "Checking your earlier fixes...")
-        similar_patches = await find_similar_patches(
-            db_service, workspace_id, vulnerabilities
-        )
-        yield send_event(
-            "rag_retrieval",
-            "complete",
-            f"{len(similar_patches)} related fixes from earlier scans",
-        )
-
-        patched_code = ""
-        if vulnerabilities:
-            yield send_event("patch_generation", "running", "Writing a patch...")
-            patched_code = await run_patch_generation(
-                iac_content, vulnerabilities, similar_patches
+            yield send_event(
+                "rag_retrieval", "running", "Checking your earlier fixes..."
+            )
+            similar_patches = await find_similar_patches(
+                db_service, workspace_id, vulnerabilities
             )
             yield send_event(
-                "patch_generation", "complete", "Patch written", patched_code
+                "rag_retrieval",
+                "complete",
+                f"{len(similar_patches)} related fixes from earlier scans",
             )
 
-        score = calculate_security_score(vulnerabilities)
-        yield send_event(
-            "scoring", "complete", f"Security Score: {score}/100", {"score": score}
-        )
+            patched_code = ""
+            if vulnerabilities:
+                yield send_event("patch_generation", "running", "Writing a patch...")
+                patched_code = await run_patch_generation(
+                    iac_content, vulnerabilities, similar_patches
+                )
+                yield send_event(
+                    "patch_generation", "complete", "Patch written", patched_code
+                )
 
-        yield send_event("storage", "running", "Saving to your history...")
-        result = {
-            "audit_id": uuid.uuid4().hex[:12],
-            "file_name": file_name,
-            "security_score": score,
-            "vulnerabilities": vulnerabilities,
-            "patched_code": patched_code,
-            "similar_past_audits": [p.get("description", "") for p in similar_patches],
-        }
-        await persist_audit(db_service, workspace_id, result, iac_content)
-        await asyncio.to_thread(_upload_audit_artifacts, iac_content, file_name, result)
-        yield send_event("storage", "complete", "Saved")
+            score = calculate_security_score(vulnerabilities)
+            yield send_event(
+                "scoring", "complete", f"Security Score: {score}/100", {"score": score}
+            )
 
-        yield send_event("done", "complete", data=result)
+            yield send_event("storage", "running", "Saving to your history...")
+            result = {
+                "audit_id": uuid.uuid4().hex[:12],
+                "file_name": file_name,
+                "security_score": score,
+                "vulnerabilities": vulnerabilities,
+                "patched_code": patched_code,
+                "similar_past_audits": [
+                    p.get("description", "") for p in similar_patches
+                ],
+            }
+            await persist_audit(db_service, workspace_id, result, iac_content)
+            await asyncio.to_thread(
+                _upload_audit_artifacts, iac_content, file_name, result
+            )
+            yield send_event("storage", "complete", "Saved")
+
+            yield send_event("done", "complete", data=result)
+    except HTTPException as e:
+        yield send_event("error", "error", e.detail)
     except AuditError as e:
         yield send_event("error", "error", str(e))
     except Exception:
@@ -228,7 +246,7 @@ async def _stream_audit_events(
         yield send_event("error", "error", "The scan failed. Please try again.")
 
 
-@router.post("/audit/stream")
+@router.post("/audit/stream", dependencies=[Depends(scan_rate_limit)])
 async def audit_stream(
     request: AuditRequest,
     db: AsyncSession = Depends(get_db),
@@ -246,7 +264,9 @@ async def audit_stream(
     )
 
 
-@router.post("/search", response_model=SearchResponse)
+@router.post(
+    "/search", response_model=SearchResponse, dependencies=[Depends(search_rate_limit)]
+)
 async def search_audits(
     request: SearchRequest,
     db: AsyncSession = Depends(get_db),
