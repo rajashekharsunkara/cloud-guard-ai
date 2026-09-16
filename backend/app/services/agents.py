@@ -1,11 +1,8 @@
-import asyncio
 import base64
 import json
 import logging
-import uuid
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
@@ -74,43 +71,97 @@ async def generate_embedding(text: str) -> list[float]:
     return await model.aembed_query(text)
 
 
-async def _embed_all(texts: list[str]) -> list:
-    """Embed concurrently; a failed item comes back as its exception."""
-    return await asyncio.gather(
-        *(generate_embedding(t) for t in texts), return_exceptions=True
+# Explaining more findings than this makes the answer long and slow; the rest
+# keep Checkov's own wording.
+MAX_EXPLAINED_FINDINGS = 60
+SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+
+
+def _format_findings(findings: list[dict]) -> str:
+    if not findings:
+        return "(none: the analyzer doesn't cover this file type or found nothing)"
+    return "\n".join(
+        f"[{i}] {f['check_id']} ({f['severity']}) {f['resource']}, "
+        f"{f['file']} lines {f['line_start']}-{f['line_end']}: {f['title']}"
+        for i, f in enumerate(findings, start=1)
     )
 
 
-async def run_security_audit(iac_content: str) -> list[dict]:
-    logger.info("scanning IaC configuration (%d chars)", len(iac_content))
-    llm = _get_groq_llm(json_mode=True)
-    prompt = _load_prompt("security_rules.txt").format(iac_content=iac_content)
+def _parse_json_object(content: str) -> dict:
+    try:
+        parsed = json.loads(_strip_code_fence(content))
+    except (json.JSONDecodeError, IndexError) as e:
+        logger.error("failed to parse review response: %s", e)
+        parsed = None
+    if not isinstance(parsed, dict):
+        raise AuditError("The review came back unreadable.")
+    return parsed
 
+
+def _clean_additional(items) -> list[dict]:
+    cleaned = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict) or not item.get("title"):
+            continue
+        severity = str(item.get("severity", "MEDIUM")).upper()
+        cleaned.append(
+            {
+                "source": "review",
+                "check_id": None,
+                "severity": severity if severity in SEVERITY_ORDER else "MEDIUM",
+                "title": str(item["title"]),
+                "description": str(item.get("description", "")),
+                "remediation": str(item.get("remediation", "")),
+                "resource": str(item.get("resource", "")),
+            }
+        )
+    return cleaned
+
+
+async def review_findings(
+    iac_content: str, file_name: str, findings: list[dict]
+) -> tuple[list[dict], list[dict]]:
+    """Explain Checkov findings and look for problems it can't detect.
+
+    Returns (findings with description/remediation filled in where the model
+    explained them, additional findings from the review).
+    """
+    ranked = sorted(findings, key=lambda f: SEVERITY_ORDER.get(f["severity"], 4))
+    to_explain = ranked[:MAX_EXPLAINED_FINDINGS]
+
+    prompt = _load_prompt("review_findings.txt").format(
+        file_name=file_name,
+        iac_content=iac_content,
+        findings=_format_findings(to_explain),
+    )
+    llm = _get_groq_llm(json_mode=True)
     response = await llm.ainvoke(
         [
             SystemMessage(
-                content="You are a cloud security expert. Always respond with valid JSON."
+                content="You are a cloud security engineer. Always respond with valid JSON."
             ),
             HumanMessage(content=prompt),
         ]
     )
+    parsed = _parse_json_object(response.content)
 
-    try:
-        parsed = json.loads(_strip_code_fence(response.content))
-    except (json.JSONDecodeError, IndexError) as e:
-        logger.error("failed to parse auditor response: %s", e)
-        parsed = None
+    explained = [dict(f) for f in ranked]
+    for item in parsed.get("explanations") or []:
+        if not isinstance(item, dict):
+            continue
+        ref = item.get("ref")
+        if isinstance(ref, int) and 1 <= ref <= len(to_explain):
+            explained[ref - 1]["description"] = str(item.get("description", ""))
+            explained[ref - 1]["remediation"] = str(item.get("remediation", ""))
 
-    if isinstance(parsed, dict):
-        parsed = parsed.get("findings")
-    # Treating an unreadable answer as "no findings" would report a clean
-    # scan for a file nobody actually reviewed.
-    if not isinstance(parsed, list):
-        raise AuditError("The review came back unreadable. Please run the scan again.")
-
-    vulnerabilities = [v for v in parsed if isinstance(v, dict)]
-    logger.info("found %d vulnerabilities", len(vulnerabilities))
-    return vulnerabilities
+    additional = _clean_additional(parsed.get("additional"))
+    logger.info(
+        "review explained %d of %d findings, added %d",
+        sum(1 for f in explained if f["description"]),
+        len(findings),
+        len(additional),
+    )
+    return explained, additional
 
 
 async def run_patch_generation(
@@ -170,14 +221,8 @@ async def run_diagram_analysis(
     return response.content
 
 
-def calculate_security_score(vulnerabilities: list[dict]) -> int:
-    """Score from 100 down: CRITICAL=-25, HIGH=-15, MEDIUM=-8, LOW=-3."""
-    penalties = {"CRITICAL": 25, "HIGH": 15, "MEDIUM": 8, "LOW": 3}
-    score = 100
-    for vuln in vulnerabilities:
-        severity = str(vuln.get("severity", "LOW")).upper()
-        score -= penalties.get(severity, 3)
-    return max(0, score)
+def _finding_text(finding: dict) -> str:
+    return f"{finding.get('title', '')}. {finding.get('description', '')}".strip(". ")
 
 
 async def find_similar_patches(
@@ -186,7 +231,7 @@ async def find_similar_patches(
     """Look up past fixes for similar findings. Failures degrade to no context."""
     if not (db_service and workspace_id and vulnerabilities):
         return []
-    combined = " | ".join(v.get("description", "") for v in vulnerabilities)
+    combined = " | ".join(_finding_text(v) for v in vulnerabilities)
     try:
         query_embedding = await generate_embedding(combined)
         return await db_service.search_similar(
@@ -197,97 +242,42 @@ async def find_similar_patches(
         return []
 
 
-async def persist_audit(
+async def index_findings(
     db_service,
     workspace_id: str,
-    audit: dict,
-    iac_content: str,
-) -> None:
-    """Store the scan itself, then embed each finding for later search.
-
-    ``audit`` needs audit_id, file_name, security_score, vulnerabilities and
-    patched_code; diagram_analysis is optional.
-    """
-    audit_id = audit["audit_id"]
-    await db_service.save_audit(
-        audit_id=audit_id,
-        workspace_id=workspace_id,
-        file_name=audit["file_name"],
-        security_score=audit["security_score"],
-        findings=audit["vulnerabilities"],
-        original_code=iac_content,
-        patched_code=audit["patched_code"],
-        diagram_analysis=audit.get("diagram_analysis"),
-    )
-
-    vulns = audit["vulnerabilities"]
-    embeddings = await _embed_all([v.get("description", "") for v in vulns])
-
-    # One bad finding shouldn't sink the rest.
-    for vuln, embedding in zip(vulns, embeddings):
-        try:
-            if isinstance(embedding, Exception):
-                raise embedding
-            description = vuln.get("description", "")
-            await db_service.save_vulnerability(
-                audit_id=audit_id,
-                workspace_id=workspace_id,
-                file_name=audit["file_name"],
-                vulnerability_type=vuln.get("title", "Unknown"),
-                severity=vuln.get("severity", "LOW"),
-                description=description,
-                resource=vuln.get("resource", ""),
-                original_code=iac_content[:2000],
-                patched_code=audit["patched_code"][:2000],
-                embedding=embedding,
-            )
-        except Exception:
-            logger.warning(
-                "failed to save finding for audit %s", audit_id, exc_info=True
-            )
-
-
-async def run_full_audit(
-    iac_content: str,
+    audit_id: str,
     file_name: str,
-    db_service=None,
-    workspace_id: Optional[str] = None,
-    image_bytes: Optional[bytes] = None,
-    image_type: str = "image/png",
-) -> dict:
-    audit_id = uuid.uuid4().hex[:12]
-    logger.info("starting audit %s for %s", audit_id, file_name)
-
-    vulnerabilities = await run_security_audit(iac_content)
-    security_score = calculate_security_score(vulnerabilities)
-
-    similar_patches = await find_similar_patches(
-        db_service, workspace_id, vulnerabilities
-    )
-
-    patched_code = ""
-    if vulnerabilities:
-        patched_code = await run_patch_generation(
-            iac_content, vulnerabilities, similar_patches
+    iac_content: str,
+    patched_code: str,
+    findings: list[dict],
+) -> None:
+    """Embed findings for search and patch examples. Best effort."""
+    if not findings:
+        return
+    try:
+        embeddings = await _get_embedding_model().aembed_documents(
+            [_finding_text(f) for f in findings]
         )
+    except Exception:
+        logger.warning("embedding failed for audit %s", audit_id, exc_info=True)
+        return
 
-    diagram_analysis = None
-    if image_bytes:
-        diagram_analysis = await run_diagram_analysis(
-            iac_content, image_bytes, image_type
-        )
-
-    result = {
-        "audit_id": audit_id,
-        "file_name": file_name,
-        "security_score": security_score,
-        "vulnerabilities": vulnerabilities,
-        "patched_code": patched_code,
-        "similar_past_audits": [p.get("description", "") for p in similar_patches],
-        "diagram_analysis": diagram_analysis,
-    }
-
-    if db_service and workspace_id:
-        await persist_audit(db_service, workspace_id, result, iac_content)
-
-    return result
+    rows = [
+        {
+            "audit_id": audit_id,
+            "workspace_id": workspace_id,
+            "file_name": file_name,
+            "vulnerability_type": f.get("title", "Unknown"),
+            "severity": f.get("severity", "LOW"),
+            "description": f.get("description") or f.get("title", ""),
+            "resource": f.get("resource", ""),
+            "original_code": iac_content[:2000],
+            "patched_code": patched_code[:2000],
+            "embedding": embedding,
+        }
+        for f, embedding in zip(findings, embeddings)
+    ]
+    try:
+        await db_service.save_vulnerabilities(rows)
+    except Exception:
+        logger.warning("failed to index findings for audit %s", audit_id, exc_info=True)

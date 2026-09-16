@@ -1,6 +1,8 @@
 # CloudGuard
 
-Scans Terraform and Docker Compose configs for security issues using a multi-agent LLM pipeline — Groq (gpt-oss-120b) for auditing and patch generation, Gemini for embeddings and diagram analysis, pgvector for retrieval over past findings.
+Scans infrastructure code for security issues. [Checkov](https://www.checkov.io/) finds the problems and decides the score, so results are the same on every run; an LLM (gpt-oss-120b on Groq) then explains each finding for the specific file, flags issues no policy covers, and writes a patched version. Gemini handles embeddings and architecture diagram checks, and pgvector retrieves earlier fixes as examples.
+
+Checkov results are free and unlimited. Explained scans use the server's Groq key and are capped per visitor per day.
 
 **[Live demo](https://cloud-guard-ai.duckdns.org)** — running on AWS.
 
@@ -21,7 +23,8 @@ Dashboard is at `http://localhost:8000`. Swagger at `/docs`. Postgres and a Loca
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/health` | DB + S3 status |
-| `POST` | `/api/audit` | Full audit, JSON response |
+| `GET` | `/api/usage` | Free explained scans left today for this client |
+| `POST` | `/api/audit` | Checkov scan, explained and patched when the free tier allows; JSON response |
 | `POST` | `/api/audit/stream` | Same pipeline, streamed as SSE |
 | `POST` | `/api/audit/diagram` | Audit + architecture diagram drift check |
 | `POST` | `/api/search` | Semantic search over your past findings |
@@ -51,6 +54,10 @@ Everything is set through environment variables (see `.env.example`):
 | `MAX_CONCURRENT_SCANS` | `2` | scans running at once; others wait up to 30s, then get a 503 |
 | `FORWARDED_ALLOW_IPS` | `127.0.0.1` | proxies trusted to set `X-Forwarded-For`; the prod compose file trusts the Docker bridge |
 | `BACKUP_INTERVAL_SECONDS` | `86400` | prod compose only; how often the database is dumped to S3 |
+| `FREE_LLM_SCANS_PER_DAY` | `5` | explained scans per client IP per UTC day; `0` for Checkov only |
+| `USAGE_HASH_SALT` | derived from `DATABASE_URL` | key for hashing client IPs in the usage table |
+| `CHECKOV_BIN` | `checkov` | set by the Docker image; point at a checkov install for local runs |
+| `CHECKOV_TIMEOUT` | `90` | seconds before a scan is stopped |
 
 ## Deploying to AWS
 
@@ -109,11 +116,14 @@ ECS/Fargate works the same way: build the image from the `Dockerfile`, pass the 
 
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt
+python -m venv .checkov && .checkov/bin/pip install -r requirements-checkov.txt
 docker compose up -d postgres localstack
-pytest backend/tests/ -v
+CHECKOV_BIN=.checkov/bin/checkov pytest backend/tests/ -v
 ```
 
-The suite covers schemas, scoring, the agent pipeline (mocked LLMs), S3 round-trips against LocalStack, pgvector similarity search, and a full audit → search → history flow.
+Checkov lives in its own virtualenv because its dependency tree is large and pinned separately (`requirements-checkov.txt`). Without `CHECKOV_BIN` the tests that run the real scanner are skipped; everything else uses recorded Checkov output from `backend/tests/fixtures`.
+
+The suite covers severity ratings and scoring, Checkov output parsing and sandboxing, the scan pipeline in each mode (mocked LLMs), rate limits, the daily free-scan quota under concurrency, S3 round-trips against LocalStack, pgvector search, and a full audit → search → history flow.
 
 ## License
 

@@ -31,6 +31,8 @@ _UPGRADES = (
     "ALTER TABLE vulnerabilities ADD COLUMN IF NOT EXISTS workspace_id VARCHAR",
     "CREATE INDEX IF NOT EXISTS ix_vulnerabilities_workspace_id "
     "ON vulnerabilities (workspace_id)",
+    "ALTER TABLE audits ADD COLUMN IF NOT EXISTS analysis JSONB",
+    "ALTER TABLE audits ALTER COLUMN security_score DROP NOT NULL",
 )
 
 

@@ -154,82 +154,17 @@ class TestSchemaValidation:
         assert item.similarity_score == 0.95
 
 
-class TestSecurityScoring:
-
-    def test_perfect_score(self):
-        from backend.app.services.agents import calculate_security_score
-
-        assert calculate_security_score([]) == 100
-
-    def test_critical_penalty(self):
-        from backend.app.services.agents import calculate_security_score
-
-        vulns = [{"severity": "CRITICAL", "title": "Test"}]
-        assert calculate_security_score(vulns) == 75
-
-    def test_high_penalty(self):
-        from backend.app.services.agents import calculate_security_score
-
-        vulns = [{"severity": "HIGH", "title": "Test"}]
-        assert calculate_security_score(vulns) == 85
-
-    def test_medium_penalty(self):
-        from backend.app.services.agents import calculate_security_score
-
-        vulns = [{"severity": "MEDIUM", "title": "Test"}]
-        assert calculate_security_score(vulns) == 92
-
-    def test_low_penalty(self):
-        from backend.app.services.agents import calculate_security_score
-
-        vulns = [{"severity": "LOW", "title": "Test"}]
-        assert calculate_security_score(vulns) == 97
-
-    def test_mixed_severities(self):
-        from backend.app.services.agents import calculate_security_score
-
-        vulns = [
-            {"severity": "CRITICAL"},
-            {"severity": "HIGH"},
-            {"severity": "MEDIUM"},
-            {"severity": "LOW"},
-        ]
-        # 100 - 25 - 15 - 8 - 3 = 49
-        assert calculate_security_score(vulns) == 49
-
-    def test_score_floor_at_zero(self):
-        from backend.app.services.agents import calculate_security_score
-
-        vulns = [{"severity": "CRITICAL"}] * 10
-        assert calculate_security_score(vulns) == 0
-
-    def test_case_insensitive_severity(self):
-        from backend.app.services.agents import calculate_security_score
-
-        vulns = [{"severity": "critical"}]
-        assert calculate_security_score(vulns) == 75
-
-    def test_unknown_severity_defaults_to_low(self):
-        from backend.app.services.agents import calculate_security_score
-
-        vulns = [{"severity": "UNKNOWN"}]
-        assert calculate_security_score(vulns) == 97
-
-    def test_missing_severity_defaults_to_low(self):
-        from backend.app.services.agents import calculate_security_score
-
-        vulns = [{"title": "Test"}]
-        assert calculate_security_score(vulns) == 97
-
-
 class TestPromptLoading:
 
-    def test_security_rules_prompt_exists(self):
+    def test_review_prompt_formats(self):
         from backend.app.services.agents import _load_prompt
 
-        content = _load_prompt("security_rules.txt")
-        assert "IaC Configuration to Audit" in content
-        assert "{iac_content}" in content
+        content = _load_prompt("review_findings.txt")
+        rendered = content.format(
+            file_name="main.tf", iac_content="resource {}", findings="[1] x"
+        )
+        assert "resource {}" in rendered
+        assert '{"explanations": [{"ref": 1' in rendered
 
     def test_patch_generator_prompt_exists(self):
         from backend.app.services.agents import _load_prompt

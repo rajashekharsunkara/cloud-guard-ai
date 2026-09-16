@@ -63,9 +63,8 @@ class TestScanSlots:
 
 class TestRateLimitedEndpoints:
 
-    @patch("backend.app.routers.auditor.run_full_audit")
-    @patch("backend.app.routers.auditor.StorageService")
-    def test_audit_returns_429_after_limit(self, _storage, mock_audit, monkeypatch):
+    @patch("backend.app.routers.auditor.run_to_completion")
+    def test_audit_returns_429_after_limit(self, mock_audit, monkeypatch):
         monkeypatch.setattr(settings, "scan_rate_limit", 2)
         mock_audit.return_value = {
             "audit_id": "a1",
@@ -73,6 +72,7 @@ class TestRateLimitedEndpoints:
             "security_score": 100,
             "vulnerabilities": [],
             "patched_code": "",
+            "analysis": {"mode": "static"},
         }
 
         async def override_get_db():

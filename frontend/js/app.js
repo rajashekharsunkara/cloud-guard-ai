@@ -247,7 +247,8 @@ refreshEditor();
 /* Scan with streamed progress */
 
 const STEPS = [
-  { id: "security_scan", label: "Reviewing configuration" },
+  { id: "static_checks", label: "Running Checkov" },
+  { id: "review", label: "Explaining findings" },
   { id: "rag_retrieval", label: "Checking your earlier fixes" },
   { id: "patch_generation", label: "Writing a patch" },
   { id: "storage", label: "Saving to history" },
@@ -318,17 +319,19 @@ function handleStreamEvent(event, context) {
     return;
   }
   if (event.step === "storage" && event.status === "running") {
-    const patchRow = document.querySelector('.step[data-step="patch_generation"]');
-    if (patchRow && patchRow.dataset.state === "pending") {
-      progress.set("patch_generation", "skipped", "Nothing to fix");
-    }
+    // Steps that never started were skipped: static-only scan, or nothing to fix.
+    document.querySelectorAll('.step[data-state="pending"]').forEach((row) => {
+      if (row.dataset.step !== "storage") progress.set(row.dataset.step, "skipped", "Skipped");
+    });
   }
   if (!STEPS.some((s) => s.id === event.step)) return;
   if (event.status === "running") {
     progress.set(event.step, "running");
+  } else if (event.status === "error") {
+    progress.set(event.step, "error", event.message);
   } else {
-    const note = event.step === "patch_generation" ? undefined : event.message;
-    progress.set(event.step, "done", event.step === "storage" ? undefined : note);
+    const quiet = event.step === "storage" || event.step === "patch_generation";
+    progress.set(event.step, "done", quiet ? undefined : event.message);
   }
 }
 
@@ -390,6 +393,7 @@ async function runScan() {
 
     progress.stop();
     historyCache.stale = true;
+    showUsage(context.result.analysis);
     renderReport($("scan-report"), { ...context.result, original_code: code });
     $("scan-report").hidden = false;
     $("scan-report").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -403,6 +407,35 @@ async function runScan() {
 }
 
 $("btn-scan").addEventListener("click", runScan);
+
+/* Free explained scans */
+
+function usageText(explanationsAvailable, left, perDay) {
+  if (!explanationsAvailable) return "Checkov results only";
+  if (left === 0) return "Free explanations used up today · Checkov results still run";
+  return `${left} of ${perDay} free explained scans left today`;
+}
+
+const usage = { perDay: 0, available: false };
+
+function showUsage(analysis) {
+  if (analysis && usage.available) {
+    $("usage-hint").textContent = usageText(true, analysis.free_scans_left, usage.perDay);
+  }
+}
+
+async function loadUsage() {
+  try {
+    const res = await fetch(`${API}/usage`);
+    if (!res.ok) return;
+    const data = await res.json();
+    usage.perDay = data.free_scans_per_day;
+    usage.available = data.explanations_available;
+    $("usage-hint").textContent = usageText(data.explanations_available, data.free_scans_left, data.free_scans_per_day);
+  } catch {
+    // The hint is optional; scans still work without it.
+  }
+}
 
 /* Report */
 
@@ -429,26 +462,65 @@ function summarize(findings) {
   return `${plural(findings.length, "finding")}. ${lead}`;
 }
 
-function renderFindings(findings) {
-  if (findings.length === 0) {
-    return `<div class="empty-state"><h3>No findings</h3><p>The review didn't flag anything. That's a good sign, not proof the file is secure.</p></div>`;
+function findingLocation(f) {
+  const parts = [];
+  if (f.check_id) parts.push(`<code>${escapeHtml(f.check_id)}</code>`);
+  if (f.file) {
+    const lines = f.line_start ? (f.line_end && f.line_end !== f.line_start ? `:${f.line_start}-${f.line_end}` : `:${f.line_start}`) : "";
+    parts.push(`<span>${escapeHtml(f.file + lines)}</span>`);
   }
-  return `<ul class="findings">${sortFindings(findings).map((f, i) => {
-    const sev = severityOf(f.severity);
-    return `
-      <li><details class="finding"${i < 3 ? " open" : ""}>
-        <summary>
-          ${icon("chevron")}
-          <span class="sev sev-${sev}">${severityLabel(sev)}</span>
-          <span class="finding-title">${escapeHtml(f.title || "Untitled finding")}</span>
-          ${f.resource ? `<code class="finding-resource" title="${escapeHtml(f.resource)}">${escapeHtml(f.resource)}</code>` : ""}
-        </summary>
-        <div class="finding-detail">
-          <p>${inlineMarkdown(f.description || "")}</p>
-          ${f.remediation ? `<h4>How to fix</h4><p>${inlineMarkdown(f.remediation)}</p>` : ""}
-        </div>
-      </details></li>`;
-  }).join("")}</ul>`;
+  return parts.length ? `<div class="finding-meta">${parts.join("")}</div>` : "";
+}
+
+function renderFindingItem(f, open) {
+  const sev = severityOf(f.severity);
+  const body = f.description
+    ? `<p>${inlineMarkdown(f.description)}</p>${f.remediation ? `<h4>How to fix</h4><p>${inlineMarkdown(f.remediation)}</p>` : ""}`
+    : `<p class="muted">No explanation in this scan. The check name above describes what failed.</p>`;
+  return `
+    <li><details class="finding"${open ? " open" : ""}>
+      <summary>
+        ${icon("chevron")}
+        <span class="sev sev-${sev}">${severityLabel(sev)}</span>
+        <span class="finding-title">${escapeHtml(f.title || "Untitled finding")}</span>
+        ${f.resource ? `<code class="finding-resource" title="${escapeHtml(f.resource)}">${escapeHtml(f.resource)}</code>` : ""}
+      </summary>
+      <div class="finding-detail">${findingLocation(f)}${body}</div>
+    </details></li>`;
+}
+
+function renderFindings(findings, analysis) {
+  const checks = sortFindings(findings.filter((f) => f.source !== "review"));
+  const review = sortFindings(findings.filter((f) => f.source === "review"));
+  const explained = analysis && analysis.mode !== "static";
+
+  if (findings.length === 0) {
+    const covered = !analysis || (analysis.covered_files || []).length > 0;
+    return covered
+      ? `<div class="empty-state"><h3>No findings</h3><p>Every Checkov policy that applies to this file passed. That's a good sign, not proof the file is secure.</p></div>`
+      : `<div class="empty-state"><h3>Nothing to report</h3><p>This file type isn't covered by Checkov${explained ? " and the review didn't flag anything" : ""}.</p></div>`;
+  }
+
+  const openFirst = explained ? 3 : 0;
+  let html = "";
+  if (checks.length) {
+    html += `<ul class="findings">${checks.map((f, i) => renderFindingItem(f, i < openFirst)).join("")}</ul>`;
+  }
+  if (review.length) {
+    html += `
+      <div class="findings-group">
+        <h3>Also noticed in review</h3>
+        <p>Found by the model review, not by a Checkov policy, so they aren't counted in the score. Double-check them.</p>
+      </div>
+      <ul class="findings">${review.map((f, i) => renderFindingItem(f, !checks.length && i < 3)).join("")}</ul>`;
+  }
+  return html;
+}
+
+function renderNotices(analysis) {
+  const notices = (analysis && analysis.notices) || [];
+  if (!notices.length) return "";
+  return `<div class="notices">${notices.map((n) => `<p>${escapeHtml(n)}</p>`).join("")}</div>`;
 }
 
 function patchedFileName(name) {
@@ -458,6 +530,8 @@ function patchedFileName(name) {
 
 function renderReport(container, result) {
   const findings = Array.isArray(result.vulnerabilities) ? result.vulnerabilities : [];
+  const analysis = result.analysis || null;
+  const scored = result.security_score !== null && result.security_score !== undefined;
   const score = Number(result.security_score) || 0;
   const counts = {};
   findings.forEach((f) => { const s = severityOf(f.severity); counts[s] = (counts[s] || 0) + 1; });
@@ -465,12 +539,17 @@ function renderReport(container, result) {
   const meta = [];
   if (result.created_at) meta.push(escapeHtml(formatDate(result.created_at)));
   if (result.audit_id) meta.push(`Scan <code>${escapeHtml(result.audit_id)}</code>`);
+  if (analysis && analysis.checkov_version) meta.push(`Checkov ${escapeHtml(analysis.checkov_version)}`);
 
   container.innerHTML = `
     <div class="report-head">
-      <div class="score" data-tone="${scoreTone(score)}" aria-label="Score ${score} out of 100">
-        <span class="score-num">${score}</span><span class="score-of">/100</span>
-      </div>
+      ${scored
+        ? `<div class="score" data-tone="${scoreTone(score)}" aria-label="Score ${score} out of 100">
+            <span class="score-num">${score}</span><span class="score-of">/100</span>
+          </div>`
+        : `<div class="score" data-tone="none" title="No file in this scan is a type Checkov covers">
+            <span class="score-num">–</span><span class="score-of">Not scored</span>
+          </div>`}
       <div class="report-summary">
         <h2>${escapeHtml(result.file_name || "main.tf")}</h2>
         <p>${escapeHtml(summarize(findings))}</p>
@@ -478,17 +557,18 @@ function renderReport(container, result) {
         ${meta.length ? `<div class="report-meta">${meta.join(" · ")}</div>` : ""}
       </div>
     </div>
+    ${renderNotices(analysis)}
     <div class="tabs" role="tablist">
       <button class="tab" role="tab" type="button" data-tab="findings" aria-selected="true">
         Findings <span class="tab-count">${findings.length}</span>
       </button>
       <button class="tab" role="tab" type="button" data-tab="patch" aria-selected="false">Patch</button>
     </div>
-    <div class="tab-panel" data-panel="findings">${renderFindings(findings)}</div>
+    <div class="tab-panel" data-panel="findings">${renderFindings(findings, analysis)}</div>
     <div class="tab-panel" data-panel="patch" hidden></div>`;
 
   const patchPanel = container.querySelector('[data-panel="patch"]');
-  renderPatch(patchPanel, result.original_code || "", result.patched_code || "", result.file_name || "main.tf");
+  renderPatch(patchPanel, result.original_code || "", result.patched_code || "", result.file_name || "main.tf", analysis);
 
   container.querySelectorAll(".tab").forEach((tab) => {
     tab.addEventListener("click", () => {
@@ -590,9 +670,12 @@ function renderDiffTable(ops, a, b) {
   return `<table>${parts.join("")}</table>`;
 }
 
-function renderPatch(panel, original, patched, fileName) {
+function renderPatch(panel, original, patched, fileName, analysis) {
   if (!patched.trim()) {
-    panel.innerHTML = `<div class="empty-state"><h3>No patch</h3><p>There was nothing to fix, so no patched file was written.</p></div>`;
+    const reason = analysis && analysis.mode === "static"
+      ? "Patches are written for explained scans. This one ran Checkov only."
+      : "There was nothing to fix, or the patch couldn't be written.";
+    panel.innerHTML = `<div class="empty-state"><h3>No patch</h3><p>${reason}</p></div>`;
     return;
   }
 
@@ -784,7 +867,9 @@ function renderScanList(rows) {
         </div>
         <div class="scan-counts">${severityCounts(counts)}</div>
         <div class="scan-date">${escapeHtml(formatDate(r.created_at))}</div>
-        <div class="scan-score" data-tone="${scoreTone(r.security_score)}">${r.security_score}</div>
+        ${r.security_score === null
+          ? `<div class="scan-score" data-tone="none" title="Not scored">–</div>`
+          : `<div class="scan-score" data-tone="${scoreTone(r.security_score)}">${r.security_score}</div>`}
       </a></li>`;
     }).join("")}</ul>`;
 }
@@ -901,4 +986,5 @@ $("confirm-clear").addEventListener("close", async () => {
 
 route();
 checkHealth();
+loadUsage();
 setInterval(checkHealth, 60000);

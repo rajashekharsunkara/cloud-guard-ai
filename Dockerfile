@@ -5,6 +5,12 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
+# Checkov gets its own virtualenv: it has a large dependency tree that would
+# otherwise have to agree with the app's pins.
+COPY requirements-checkov.txt .
+RUN python -m venv /opt/checkov \
+    && /opt/checkov/bin/pip install --no-cache-dir -r requirements-checkov.txt
+
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -13,6 +19,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY --from=builder /install /usr/local
+COPY --from=builder /opt/checkov /opt/checkov
+ENV CHECKOV_BIN=/opt/checkov/bin/checkov
 COPY backend/ ./backend/
 COPY frontend/ ./frontend/
 

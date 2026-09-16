@@ -293,6 +293,9 @@ kbd {
 .score[data-tone="good"] .score-num { color: var(--good); }
 .score[data-tone="fair"] .score-num { color: var(--medium); }
 .score[data-tone="poor"] .score-num { color: var(--critical); }
+.score[data-tone="none"] { flex-direction: column; align-items: flex-start; gap: 4px; }
+.score[data-tone="none"] .score-num { color: var(--text-3); }
+.score[data-tone="none"] .score-of { font-size: 13px; white-space: nowrap; }
 
 .report-summary { min-width: 0; flex: 1; }
 .report-summary h2 { font: 600 16px var(--mono); overflow-wrap: anywhere; }
@@ -351,6 +354,27 @@ kbd {
   font-size: 0.88em; padding: 1px 4px; border-radius: 4px; background: var(--surface-2); color: var(--text);
 }
 .finding-detail h4 { font-size: 13px; margin: 14px 0 4px; color: var(--text); }
+
+.finding-meta {
+  display: flex; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 8px;
+  font: 12px var(--mono); color: var(--text-3);
+}
+.finding-meta code { color: var(--text-2); }
+.finding-detail p.muted { color: var(--text-3); font-size: 14px; }
+
+.findings-group { margin-top: 32px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+.findings-group h3 { font-size: 15px; }
+.findings-group p { margin: 4px 0 10px; font-size: 13px; color: var(--text-3); }
+
+.notices {
+  margin: 0 0 20px; padding: 12px 16px;
+  border: 1px solid var(--border); border-left: 3px solid var(--medium); border-radius: 6px;
+  background: var(--surface);
+}
+.notices p { font-size: 14px; color: var(--text-2); }
+.notices p + p { margin-top: 6px; }
+
+.checks li strong { color: var(--text); font-weight: 600; }
 
 .empty-state { padding: 40px 0; color: var(--text-2); }
 .empty-state h3 { font-size: 15px; color: var(--text); margin-bottom: 4px; }
@@ -457,6 +481,7 @@ kbd {
 .scan-score[data-tone="good"] { color: var(--good); }
 .scan-score[data-tone="fair"] { color: var(--medium); }
 .scan-score[data-tone="poor"] { color: var(--critical); }
+.scan-score[data-tone="none"] { color: var(--text-3); }
 
 .result-row {
   display: block; padding: 14px 4px; border-bottom: 1px solid var(--border);
@@ -589,8 +614,8 @@ kbd {
   .editor-body { height: 360px; }
   .editor-bar .editor-meta { display: none; }
   .filename { width: 130px; }
-  .hint kbd, .editor-foot .hint { display: none; }
-  .editor-foot { justify-content: flex-end; }
+  .hint kbd { display: none; }
+  .editor-foot .hint { font-size: 12px; }
   .report-head { flex-direction: column; align-items: flex-start; gap: 12px; }
   .score-num { font-size: 44px; }
   .finding summary { grid-template-columns: 14px 64px minmax(0, 1fr); }

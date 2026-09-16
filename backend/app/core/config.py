@@ -49,6 +49,18 @@ class Settings(BaseSettings):
     search_rate_limit: int = Field(default=30, description="Searches per minute")
     max_concurrent_scans: int = Field(default=2, description="Scans running at once")
 
+    checkov_bin: str = Field(default="checkov", description="Path to the checkov CLI")
+    checkov_timeout: int = Field(
+        default=90, description="Seconds before a scan is killed"
+    )
+
+    # Explanations and patches on the server's own LLM key, per client per day.
+    # Set to 0 to offer static checks only unless visitors bring a key.
+    free_llm_scans_per_day: int = Field(default=5)
+    # Keyed hash for client addresses in the usage table. Defaults to a value
+    # derived from DATABASE_URL so counts survive restarts without extra setup.
+    usage_hash_salt: str = Field(default="")
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

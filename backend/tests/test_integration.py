@@ -59,37 +59,39 @@ class TestAPIIntegration:
         finally:
             app.dependency_overrides.clear()
 
-    @patch("backend.app.routers.auditor.run_full_audit")
-    @patch("backend.app.routers.auditor.StorageService")
-    def test_audit_endpoint_success(self, mock_storage_class, mock_run_full_audit):
-        mock_run_full_audit.return_value = {
+    @patch("backend.app.routers.auditor.run_to_completion")
+    def test_audit_endpoint_success(self, mock_run):
+        mock_run.return_value = {
             "audit_id": "test_audit_id",
             "file_name": "main.tf",
-            "security_score": 85,
+            "security_score": 69,
             "vulnerabilities": [
                 {
-                    "title": "Exposed S3 Bucket",
-                    "severity": "HIGH",
+                    "source": "checkov",
+                    "check_id": "CKV_AWS_20",
+                    "title": "S3 Bucket has an ACL defined which allows public READ access",
+                    "severity": "CRITICAL",
                     "description": "S3 bucket is public",
                     "resource": "aws_s3_bucket.main",
+                    "file": "main.tf",
+                    "line_start": 1,
+                    "line_end": 3,
                 }
             ],
             "patched_code": 'resource "aws_s3_bucket" "main" { acl = "private" }',
-            "similar_past_audits": ["S3 bucket is public"],
+            "similar_past_audits": [],
             "diagram_analysis": None,
+            "analysis": {
+                "mode": "free",
+                "covered_files": ["main.tf"],
+                "free_scans_left": 4,
+            },
         }
 
-        mock_storage = MagicMock()
-        mock_storage.upload_file.return_value = "scans/test_key.tf"
-        mock_storage_class.return_value = mock_storage
-
-        mock_db = AsyncMock()
-
         async def override_get_db():
-            yield mock_db
+            yield AsyncMock()
 
         app.dependency_overrides[get_db] = override_get_db
-
         payload = {
             "iac_content": 'resource "aws_s3_bucket" "main" { acl = "public-read" }',
             "file_name": "main.tf",
@@ -100,14 +102,28 @@ class TestAPIIntegration:
             assert response.status_code == 200
             data = response.json()
             assert data["audit_id"] == "test_audit_id"
-            assert data["security_score"] == 85
-            assert len(data["vulnerabilities"]) == 1
-            assert data["vulnerabilities"][0]["severity"] == "HIGH"
-            assert "patched_code" in data
-            assert (
-                data["patched_code"]
-                == 'resource "aws_s3_bucket" "main" { acl = "private" }'
+            assert data["security_score"] == 69
+            assert data["vulnerabilities"][0]["check_id"] == "CKV_AWS_20"
+            assert data["analysis"]["mode"] == "free"
+        finally:
+            app.dependency_overrides.clear()
+
+    @patch("backend.app.routers.auditor.run_to_completion")
+    def test_audit_endpoint_scanner_failure(self, mock_run):
+        from backend.app.services.pipeline import ScanFailed
+
+        mock_run.side_effect = ScanFailed("The static checks failed to run")
+
+        async def override_get_db():
+            yield AsyncMock()
+
+        app.dependency_overrides[get_db] = override_get_db
+        try:
+            response = client.post(
+                "/api/audit", json={"iac_content": "resource {} x y z"}
             )
+            assert response.status_code == 502
+            assert response.json()["detail"] == "The static checks failed to run"
         finally:
             app.dependency_overrides.clear()
 

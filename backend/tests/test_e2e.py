@@ -1,24 +1,43 @@
-import pytest
-from unittest.mock import patch
+import uuid
+from unittest.mock import AsyncMock, patch
+
 import httpx
+import pytest
 from httpx import AsyncClient
 
-from backend.app.main import app
-from backend.app.services.storage import StorageService
 from backend.app.core.aws import get_s3_client
 from backend.app.core.config import settings
+from backend.app.main import app
+from backend.app.services.checkov import CheckovReport
+from backend.app.services.storage import StorageService
+
+SSH_FINDING = {
+    "source": "checkov",
+    "check_id": "CKV_AWS_24",
+    "severity": "CRITICAL",
+    "title": "Ensure no security groups allow ingress from 0.0.0.0:0 to port 22",
+    "description": "",
+    "remediation": "",
+    "resource": "aws_security_group.web_sg",
+    "file": "e2e_test.tf",
+    "line_start": 1,
+    "line_end": 1,
+}
 
 
 class TestEndToEndWorkflow:
 
     @pytest.mark.asyncio
-    @patch("backend.app.routers.auditor.generate_embedding")
-    @patch("backend.app.services.agents.run_security_audit")
-    @patch("backend.app.services.agents.run_patch_generation")
-    @patch("backend.app.services.agents.generate_embedding")
+    @patch("backend.app.services.agents._get_embedding_model")
+    @patch("backend.app.services.agents.run_patch_generation", new_callable=AsyncMock)
+    @patch("backend.app.services.agents.review_findings", new_callable=AsyncMock)
+    @patch("backend.app.services.pipeline.run_checkov", new_callable=AsyncMock)
     async def test_complete_audit_search_history_flow(
-        self, mock_embedding_agents, mock_patch, mock_scan, mock_embedding_router
+        self, mock_checkov, mock_review, mock_patch, mock_embedding_model, monkeypatch
     ):
+        # A fresh salt gives this run its own free-scan counter.
+        monkeypatch.setattr(settings, "usage_hash_salt", uuid.uuid4().hex)
+
         async with AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -30,19 +49,28 @@ class TestEndToEndWorkflow:
             assert health_data["database"] == "connected"
             assert health_data["s3"] == "connected"
 
+            usage = (await client.get("/api/usage")).json()
+            assert usage["explanations_available"] is True
+            assert usage["free_scans_left"] == settings.free_llm_scans_per_day
+
             # Configure mocks
-            mock_scan.return_value = [
-                {
-                    "title": "Unsecured SSH Port",
-                    "severity": "CRITICAL",
-                    "description": "Port 22 is open to the internet",
-                    "resource": "aws_security_group.web_sg",
-                    "remediation": "Restrict access to specific IPs",
-                }
-            ]
+            mock_checkov.return_value = CheckovReport(
+                findings=[SSH_FINDING],
+                covered_files=["e2e_test.tf"],
+                frameworks=["terraform"],
+                version="3.3.17",
+            )
+            mock_review.return_value = (
+                [dict(SSH_FINDING, description="Port 22 is open to the internet")],
+                [],
+            )
             mock_patch.return_value = 'resource "aws_security_group" "web_sg" {\n  # FIXED: restricted port 22\n}'
-            mock_embedding_agents.return_value = [0.05] * 768
-            mock_embedding_router.return_value = [0.05] * 768
+            mock_embedding_model.return_value.aembed_documents = AsyncMock(
+                side_effect=lambda texts: [[0.05] * 768 for _ in texts]
+            )
+            mock_embedding_model.return_value.aembed_query = AsyncMock(
+                return_value=[0.05] * 768
+            )
 
             # Run audit
             audit_payload = {
@@ -59,10 +87,15 @@ class TestEndToEndWorkflow:
 
             audit_id = audit_data["audit_id"]
             assert audit_data["file_name"] == "e2e_test.tf"
-            assert audit_data["security_score"] == 75  # 100 - 25 (CRITICAL)
+            assert audit_data["security_score"] == 69  # one critical Checkov finding
             assert len(audit_data["vulnerabilities"]) == 1
-            assert audit_data["vulnerabilities"][0]["severity"] == "CRITICAL"
+            assert audit_data["vulnerabilities"][0]["check_id"] == "CKV_AWS_24"
             assert "FIXED" in audit_data["patched_code"]
+            assert audit_data["analysis"]["mode"] == "free"
+            assert (
+                audit_data["analysis"]["free_scans_left"]
+                == settings.free_llm_scans_per_day - 1
+            )
 
             # Verify S3 storage
             storage = StorageService()
@@ -97,7 +130,7 @@ class TestEndToEndWorkflow:
                 r for r in search_data["results"] if r["audit_id"] == audit_id
             ]
             assert len(our_results) == 1
-            assert our_results[0]["vulnerability_type"] == "Unsecured SSH Port"
+            assert our_results[0]["vulnerability_type"] == SSH_FINDING["title"]
 
             # Audit history
             history_resp = await client.get("/api/history")
@@ -109,7 +142,9 @@ class TestEndToEndWorkflow:
 
             detail_resp = await client.get(f"/api/history/{audit_id}")
             assert detail_resp.status_code == 200
-            assert detail_resp.json()["original_code"] == audit_payload["iac_content"]
+            detail = detail_resp.json()
+            assert detail["original_code"] == audit_payload["iac_content"]
+            assert detail["analysis"]["covered_files"] == ["e2e_test.tf"]
 
         # A different browser gets its own workspace and sees none of it.
         async with AsyncClient(

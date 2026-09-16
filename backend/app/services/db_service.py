@@ -24,8 +24,11 @@ class Audit(Base):
     id = Column(String, primary_key=True)
     workspace_id = Column(String, nullable=False, index=True)
     file_name = Column(String, nullable=False)
-    security_score = Column(Integer, nullable=False)
+    # None when no file in the scan is a type Checkov understands.
+    security_score = Column(Integer, nullable=True)
     findings = Column(JSONB, nullable=False, default=list)
+    # How the scan ran: static checks only or explained, coverage, notices.
+    analysis = Column(JSONB, nullable=True)
     original_code = Column(Text, default="")
     patched_code = Column(Text, default="")
     diagram_analysis = Column(Text, nullable=True)
@@ -64,11 +67,12 @@ class DBService:
         audit_id: str,
         workspace_id: str,
         file_name: str,
-        security_score: int,
+        security_score: Optional[int],
         findings: list[dict],
         original_code: str = "",
         patched_code: str = "",
         diagram_analysis: Optional[str] = None,
+        analysis: Optional[dict] = None,
     ) -> Audit:
         audit = Audit(
             id=audit_id,
@@ -79,6 +83,7 @@ class DBService:
             original_code=original_code,
             patched_code=patched_code,
             diagram_analysis=diagram_analysis,
+            analysis=analysis,
         )
         self.session.add(audit)
         await self.session.commit()
@@ -119,6 +124,11 @@ class DBService:
             audit_id,
         )
         return vuln
+
+    async def save_vulnerabilities(self, rows: list[dict]) -> None:
+        self.session.add_all(Vulnerability(**row) for row in rows)
+        await self.session.commit()
+        logger.info("indexed %d findings", len(rows))
 
     async def search_similar(
         self, query_embedding: list[float], workspace_id: str, limit: int = 5
@@ -191,6 +201,7 @@ class DBService:
             "original_code": audit.original_code,
             "patched_code": audit.patched_code,
             "diagram_analysis": audit.diagram_analysis,
+            "analysis": audit.analysis,
             "created_at": audit.created_at,
         }
 

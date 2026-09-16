@@ -1,0 +1,810 @@
+[
+ {
+  "check_type": "terraform",
+  "results": {
+   "passed_checks": [
+    {
+     "check_id": "CKV_AWS_93",
+     "check_name": "Ensure S3 bucket policy does not lockout all but root user. (Prevent lockouts needing root account fixes)",
+     "resource": "aws_s3_bucket.data_lake",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      1,
+      4
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_388",
+     "check_name": "Ensure AWS Aurora PostgreSQL is not exposed to local file read vulnerability",
+     "resource": "aws_db_instance.production_db",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      6,
+      16
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_354",
+     "check_name": "Ensure RDS Performance Insights are encrypted using KMS CMKs",
+     "resource": "aws_db_instance.production_db",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      6,
+      16
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_211",
+     "check_name": "Ensure RDS uses a modern CaCert",
+     "resource": "aws_db_instance.production_db",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      6,
+      16
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_133",
+     "check_name": "Ensure that RDS instances has backup policy",
+     "resource": "aws_db_instance.production_db",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      6,
+      16
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_277",
+     "check_name": "Ensure no security groups allow ingress from 0.0.0.0:0 to port -1",
+     "resource": "aws_security_group.web_sg",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      18,
+      34
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_88",
+     "check_name": "EC2 instance should not have public IP.",
+     "resource": "aws_instance.web_server",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      36,
+      45
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_46",
+     "check_name": "Ensure no hard-coded secrets exist in EC2 user data",
+     "resource": "aws_instance.web_server",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      36,
+      45
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV2_AWS_5",
+     "check_name": "Ensure that Security Groups are attached to another resource",
+     "resource": "aws_security_group.web_sg",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      18,
+      34
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV2_AWS_69",
+     "check_name": "Ensure AWS RDS database instance configured with encryption in transit",
+     "resource": "aws_db_instance.production_db",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      6,
+      16
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_19",
+     "check_name": "Ensure all data stored in the S3 bucket is securely encrypted at rest",
+     "resource": "aws_s3_bucket.data_lake",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      1,
+      4
+     ],
+     "guideline": null,
+     "severity": null
+    }
+   ],
+   "failed_checks": [
+    {
+     "check_id": "CKV_AWS_17",
+     "check_name": "Ensure all data stored in RDS is not publicly accessible",
+     "resource": "aws_db_instance.production_db",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      6,
+      16
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_157",
+     "check_name": "Ensure that RDS instances have Multi-AZ enabled",
+     "resource": "aws_db_instance.production_db",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      6,
+      16
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_353",
+     "check_name": "Ensure that RDS instances have performance insights enabled",
+     "resource": "aws_db_instance.production_db",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      6,
+      16
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_293",
+     "check_name": "Ensure that AWS database instances have deletion protection enabled",
+     "resource": "aws_db_instance.production_db",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      6,
+      16
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_161",
+     "check_name": "Ensure RDS database has IAM authentication enabled",
+     "resource": "aws_db_instance.production_db",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      6,
+      16
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_118",
+     "check_name": "Ensure that enhanced monitoring is enabled for Amazon RDS instances",
+     "resource": "aws_db_instance.production_db",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      6,
+      16
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_16",
+     "check_name": "Ensure all data stored in the RDS is securely encrypted at rest",
+     "resource": "aws_db_instance.production_db",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      6,
+      16
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_226",
+     "check_name": "Ensure DB instance gets all minor upgrades automatically",
+     "resource": "aws_db_instance.production_db",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      6,
+      16
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_129",
+     "check_name": "Ensure that respective logs of Amazon Relational Database Service (Amazon RDS) are enabled",
+     "resource": "aws_db_instance.production_db",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      6,
+      16
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_260",
+     "check_name": "Ensure no security groups allow ingress from 0.0.0.0:0 to port 80",
+     "resource": "aws_security_group.web_sg",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      18,
+      34
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_25",
+     "check_name": "Ensure no security groups allow ingress from 0.0.0.0:0 to port 3389",
+     "resource": "aws_security_group.web_sg",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      18,
+      34
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_24",
+     "check_name": "Ensure no security groups allow ingress from 0.0.0.0:0 to port 22",
+     "resource": "aws_security_group.web_sg",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      18,
+      34
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_382",
+     "check_name": "Ensure no security groups allow egress from 0.0.0.0:0 to port -1",
+     "resource": "aws_security_group.web_sg",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      18,
+      34
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_23",
+     "check_name": "Ensure every security group and rule has a description",
+     "resource": "aws_security_group.web_sg",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      18,
+      34
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_8",
+     "check_name": "Ensure all data stored in the Launch configuration or instance Elastic Blocks Store is securely encrypted",
+     "resource": "aws_instance.web_server",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      36,
+      45
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_79",
+     "check_name": "Ensure Instance Metadata Service Version 1 is not enabled",
+     "resource": "aws_instance.web_server",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      36,
+      45
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_135",
+     "check_name": "Ensure that EC2 is EBS optimized",
+     "resource": "aws_instance.web_server",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      36,
+      45
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_126",
+     "check_name": "Ensure that detailed monitoring is enabled for EC2 instances",
+     "resource": "aws_instance.web_server",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      36,
+      45
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV2_AWS_6",
+     "check_name": "Ensure that S3 bucket has a Public Access block",
+     "resource": "aws_s3_bucket.data_lake",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      1,
+      4
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV2_AWS_62",
+     "check_name": "Ensure S3 buckets should have event notifications enabled",
+     "resource": "aws_s3_bucket.data_lake",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      1,
+      4
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_144",
+     "check_name": "Ensure that S3 bucket has cross-region replication enabled",
+     "resource": "aws_s3_bucket.data_lake",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      1,
+      4
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_18",
+     "check_name": "Ensure the S3 bucket has access logging enabled",
+     "resource": "aws_s3_bucket.data_lake",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      1,
+      4
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV2_AWS_61",
+     "check_name": "Ensure that an S3 bucket has a lifecycle configuration",
+     "resource": "aws_s3_bucket.data_lake",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      1,
+      4
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_20",
+     "check_name": "S3 Bucket has an ACL defined which allows public READ access.",
+     "resource": "aws_s3_bucket.data_lake",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      1,
+      4
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_145",
+     "check_name": "Ensure that S3 buckets are encrypted with KMS by default",
+     "resource": "aws_s3_bucket.data_lake",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      1,
+      4
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_21",
+     "check_name": "Ensure all data stored in the S3 bucket have versioning enabled",
+     "resource": "aws_s3_bucket.data_lake",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      1,
+      4
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_AWS_57",
+     "check_name": "S3 Bucket has an ACL defined which allows public WRITE access.",
+     "resource": "aws_s3_bucket.data_lake",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      1,
+      4
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV2_AWS_60",
+     "check_name": "Ensure RDS instance with copy tags to snapshots is enabled",
+     "resource": "aws_db_instance.production_db",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      6,
+      16
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV2_AWS_41",
+     "check_name": "Ensure an IAM role is attached to EC2 instance",
+     "resource": "aws_instance.web_server",
+     "file_path": "/main.tf",
+     "file_line_range": [
+      36,
+      45
+     ],
+     "guideline": null,
+     "severity": null
+    }
+   ],
+   "skipped_checks": [],
+   "parsing_errors": []
+  },
+  "summary": {
+   "passed": 11,
+   "failed": 29,
+   "skipped": 0,
+   "parsing_errors": 0,
+   "resource_count": 4,
+   "checkov_version": "3.3.17"
+  },
+  "url": "Add an api key '--bc-api-key <api-key>' to see more detailed insights via https://bridgecrew.cloud"
+ },
+ {
+  "check_type": "dockerfile",
+  "results": {
+   "passed_checks": [
+    {
+     "check_id": "CKV_DOCKER_9",
+     "check_name": "Ensure that APT isn't used",
+     "resource": "/Dockerfile.",
+     "file_path": "/Dockerfile",
+     "file_line_range": [
+      1,
+      3
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_DOCKER_11",
+     "check_name": "Ensure From Alias are unique for multistage builds.",
+     "resource": "/Dockerfile.",
+     "file_path": "/Dockerfile",
+     "file_line_range": [
+      1,
+      3
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV2_DOCKER_1",
+     "check_name": "Ensure that sudo isn't used",
+     "resource": "/Dockerfile.RUN",
+     "file_path": "/Dockerfile",
+     "file_line_range": [
+      2,
+      2
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV2_DOCKER_9",
+     "check_name": "Ensure that packages with untrusted or missing GPG signatures are not used by dnf, tdnf, or yum via the '--nogpgcheck' option",
+     "resource": "/Dockerfile.RUN",
+     "file_path": "/Dockerfile",
+     "file_line_range": [
+      2,
+      2
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV2_DOCKER_15",
+     "check_name": "Ensure that the yum and dnf package managers are not configured to disable SSL certificate validation via the 'sslverify' configuration option",
+     "resource": "/Dockerfile.RUN",
+     "file_path": "/Dockerfile",
+     "file_line_range": [
+      2,
+      2
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV2_DOCKER_2",
+     "check_name": "Ensure that certificate validation isn't disabled with curl",
+     "resource": "/Dockerfile.RUN",
+     "file_path": "/Dockerfile",
+     "file_line_range": [
+      2,
+      2
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV2_DOCKER_3",
+     "check_name": "Ensure that certificate validation isn't disabled with wget",
+     "resource": "/Dockerfile.RUN",
+     "file_path": "/Dockerfile",
+     "file_line_range": [
+      2,
+      2
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV2_DOCKER_10",
+     "check_name": "Ensure that packages with untrusted or missing signatures are not used by rpm via the '--nodigest', '--nosignature', '--noverify', or '--nofiledigest' options",
+     "resource": "/Dockerfile.RUN",
+     "file_path": "/Dockerfile",
+     "file_line_range": [
+      2,
+      2
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV2_DOCKER_17",
+     "check_name": "Ensure that 'chpasswd' is not used to set or remove passwords",
+     "resource": "/Dockerfile.RUN",
+     "file_path": "/Dockerfile",
+     "file_line_range": [
+      2,
+      2
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV2_DOCKER_5",
+     "check_name": "Ensure that certificate validation isn't disabled with the PYTHONHTTPSVERIFY environment variable",
+     "resource": "/Dockerfile.RUN",
+     "file_path": "/Dockerfile",
+     "file_line_range": [
+      2,
+      2
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV2_DOCKER_16",
+     "check_name": "Ensure that certificate validation isn't disabled with pip via the 'PIP_TRUSTED_HOST' environment variable",
+     "resource": "/Dockerfile.RUN",
+     "file_path": "/Dockerfile",
+     "file_line_range": [
+      2,
+      2
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV2_DOCKER_13",
+     "check_name": "Ensure that certificate validation isn't disabled for npm or yarn by setting the option strict-ssl to false",
+     "resource": "/Dockerfile.RUN",
+     "file_path": "/Dockerfile",
+     "file_line_range": [
+      2,
+      2
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV2_DOCKER_8",
+     "check_name": "Ensure that packages with untrusted or missing signatures are not used by apt-get via the '--allow-unauthenticated' option",
+     "resource": "/Dockerfile.RUN",
+     "file_path": "/Dockerfile",
+     "file_line_range": [
+      2,
+      2
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV2_DOCKER_11",
+     "check_name": "Ensure that the '--force-yes' option is not used, as it disables signature validation and allows packages to be downgraded which can leave the system in a broken or inconsistent state",
+     "resource": "/Dockerfile.RUN",
+     "file_path": "/Dockerfile",
+     "file_line_range": [
+      2,
+      2
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV2_DOCKER_7",
+     "check_name": "Ensure that packages with untrusted or missing signatures are not used by apk via the '--allow-untrusted' option",
+     "resource": "/Dockerfile.RUN",
+     "file_path": "/Dockerfile",
+     "file_line_range": [
+      2,
+      2
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV2_DOCKER_4",
+     "check_name": "Ensure that certificate validation isn't disabled with the pip '--trusted-host' option",
+     "resource": "/Dockerfile.RUN",
+     "file_path": "/Dockerfile",
+     "file_line_range": [
+      2,
+      2
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV2_DOCKER_12",
+     "check_name": "Ensure that certificate validation isn't disabled for npm via the 'NPM_CONFIG_STRICT_SSL' environment variable",
+     "resource": "/Dockerfile.RUN",
+     "file_path": "/Dockerfile",
+     "file_line_range": [
+      2,
+      2
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV2_DOCKER_6",
+     "check_name": "Ensure that certificate validation isn't disabled with the NODE_TLS_REJECT_UNAUTHORIZED environment variable",
+     "resource": "/Dockerfile.RUN",
+     "file_path": "/Dockerfile",
+     "file_line_range": [
+      2,
+      2
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV2_DOCKER_14",
+     "check_name": "Ensure that certificate validation isn't disabled for git by setting the environment variable 'GIT_SSL_NO_VERIFY' to any value",
+     "resource": "/Dockerfile.RUN",
+     "file_path": "/Dockerfile",
+     "file_line_range": [
+      2,
+      2
+     ],
+     "guideline": null,
+     "severity": null
+    }
+   ],
+   "failed_checks": [
+    {
+     "check_id": "CKV_DOCKER_5",
+     "check_name": "Ensure update instructions are not use alone in the Dockerfile",
+     "resource": "/Dockerfile.RUN",
+     "file_path": "/Dockerfile",
+     "file_line_range": [
+      2,
+      2
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_DOCKER_7",
+     "check_name": "Ensure the base image uses a non latest version tag",
+     "resource": "/Dockerfile.FROM",
+     "file_path": "/Dockerfile",
+     "file_line_range": [
+      1,
+      1
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_DOCKER_4",
+     "check_name": "Ensure that COPY is used instead of ADD in Dockerfiles",
+     "resource": "/Dockerfile.ADD",
+     "file_path": "/Dockerfile",
+     "file_line_range": [
+      3,
+      3
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_DOCKER_3",
+     "check_name": "Ensure that a user for the container has been created",
+     "resource": "/Dockerfile.",
+     "file_path": "/Dockerfile",
+     "file_line_range": [
+      1,
+      3
+     ],
+     "guideline": null,
+     "severity": null
+    },
+    {
+     "check_id": "CKV_DOCKER_2",
+     "check_name": "Ensure that HEALTHCHECK instructions have been added to container images",
+     "resource": "/Dockerfile.",
+     "file_path": "/Dockerfile",
+     "file_line_range": [
+      1,
+      3
+     ],
+     "guideline": null,
+     "severity": null
+    }
+   ],
+   "skipped_checks": [],
+   "parsing_errors": []
+  },
+  "summary": {
+   "passed": 19,
+   "failed": 5,
+   "skipped": 0,
+   "parsing_errors": 0,
+   "resource_count": 1,
+   "checkov_version": "3.3.17"
+  },
+  "url": "Add an api key '--bc-api-key <api-key>' to see more detailed insights via https://bridgecrew.cloud"
+ }
+]

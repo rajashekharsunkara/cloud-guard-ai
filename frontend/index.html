@@ -85,23 +85,20 @@
               placeholder="resource &quot;aws_s3_bucket&quot; &quot;logs&quot; {&#10;  bucket = &quot;acme-app-logs&quot;&#10;}"></textarea>
           </div>
           <div class="editor-foot">
-            <span class="hint"><kbd>Ctrl</kbd> <kbd>Enter</kbd> to scan</span>
-            <button class="btn btn-primary" id="btn-scan" type="button">Scan</button>
+            <span class="hint" id="usage-hint"><kbd>Ctrl</kbd> <kbd>Enter</kbd> to scan</span>
+            <button class="btn btn-primary" id="btn-scan" type="button" title="Scan (Ctrl+Enter)">Scan</button>
           </div>
         </div>
 
         <aside class="side">
           <div id="side-idle">
-            <h2 class="side-title">What it looks for</h2>
+            <h2 class="side-title">How a scan works</h2>
             <ul class="checks">
-              <li>Storage buckets and databases reachable from the internet</li>
-              <li>Data stored or sent without encryption</li>
-              <li>Security groups and IAM policies that allow too much</li>
-              <li>Passwords, tokens and keys written into the file</li>
-              <li>Missing logging, versioning and backups</li>
-              <li>Resources without ownership tags</li>
+              <li><strong>Checkov</strong> runs over 1,000 policies for Terraform, CloudFormation, Kubernetes and Dockerfiles. Its findings decide the score.</li>
+              <li>An explained scan then says what each finding means for this file and how to fix it.</li>
+              <li>It also looks for problems no policy covers, such as secrets in Docker Compose, and writes a patched file.</li>
             </ul>
-            <p class="side-note">A scan takes 10 to 30 seconds. Results are a review, not a guarantee. Read the <a href="#how">limits</a> before relying on them.</p>
+            <p class="side-note">Checkov takes a few seconds. An explained scan takes 30 to 60 seconds. <a href="#how">More detail</a></p>
           </div>
 
           <div id="side-progress" hidden>
@@ -179,57 +176,66 @@
     <section class="view" id="view-how" data-title="How it works" hidden>
       <article class="prose">
         <h1>How CloudGuard works</h1>
-        <p class="lead">CloudGuard reviews infrastructure code for security mistakes before it gets deployed. It reads Terraform and Docker Compose files, explains each problem it finds, and suggests a corrected file.</p>
+        <p class="lead">CloudGuard checks infrastructure code for security mistakes before it gets deployed. A proven static analyzer finds the problems, and a language model explains them in terms of your file and writes a corrected version.</p>
 
         <h2>What happens when you scan</h2>
         <ol class="walkthrough">
           <li>
-            <h3>Review</h3>
-            <p>Your file is sent to OpenAI's open-weight gpt-oss-120b model, running on Groq, with instructions to look for the problems listed on the scan page. It returns a list of findings, each with a severity, the resource it affects and a suggested fix.</p>
+            <h3>Checkov runs the policies</h3>
+            <p><a href="https://www.checkov.io/">Checkov</a> is an open-source analyzer with over 1,000 policies for Terraform, CloudFormation, Kubernetes, Helm and Dockerfiles. It reports each resource that fails a policy, with the file and lines involved. The same file always gives the same findings.</p>
           </li>
           <li>
-            <h3>Check earlier fixes</h3>
-            <p>Each finding is converted into an embedding with Google's Gemini embedding model and compared with findings from your own earlier scans, stored in PostgreSQL with pgvector. The closest matches and the patches written for them become examples for the next step, which keeps fixes consistent between files. Only your scans are searched.</p>
+            <h3>The findings get explained</h3>
+            <p>The file and Checkov's findings go to gpt-oss-120b, OpenAI's open-weight model running on Groq. For each finding it says what is actually at risk in your file and which setting to change. It also points out problems no policy covers, such as passwords in a Docker Compose file. Those are listed separately and don't affect the score.</p>
           </li>
           <li>
-            <h3>Write a patch</h3>
-            <p>The model rewrites the whole file with every finding addressed and marks changed lines with a <code># FIXED:</code> comment. The page shows it as a diff against what you pasted.</p>
+            <h3>Earlier fixes are checked</h3>
+            <p>Findings are compared with findings from your own earlier scans using embeddings stored in PostgreSQL with pgvector. The closest matches and the patches written for them are used as examples, which keeps fixes consistent between files. Only your scans are searched.</p>
           </li>
           <li>
-            <h3>Score</h3>
-            <p>The score starts at 100 and drops for each finding. It never goes below 0.</p>
-            <table class="score-table">
-              <thead><tr><th>Severity</th><th>Points</th></tr></thead>
-              <tbody>
-                <tr><td><span class="sev sev-critical">Critical</span></td><td>&minus;25</td></tr>
-                <tr><td><span class="sev sev-high">High</span></td><td>&minus;15</td></tr>
-                <tr><td><span class="sev sev-medium">Medium</span></td><td>&minus;8</td></tr>
-                <tr><td><span class="sev sev-low">Low</span></td><td>&minus;3</td></tr>
-              </tbody>
-            </table>
+            <h3>A patch is written</h3>
+            <p>The model rewrites the file with the findings addressed and marks changed lines with a <code># FIXED:</code> comment. The page shows it as a diff against what you pasted.</p>
           </li>
           <li>
-            <h3>Save</h3>
-            <p>The scan goes into your history. A copy of the original and patched files is written to a private S3 bucket.</p>
+            <h3>The scan is saved</h3>
+            <p>It goes into your history. A copy of the original and patched files is written to a private S3 bucket.</p>
           </li>
         </ol>
 
+        <h2>Free explained scans</h2>
+        <p>Checkov results are always free. Explanations, extra review findings, patches and diagram checks use a paid model, so each visitor gets a few explained scans per day. After that, scans still run Checkov and show every finding, just without explanations or a patch.</p>
+
+        <h2>How the score works</h2>
+        <p>Only Checkov findings count, so the score is the same every time you scan the same file. CloudGuard rates each Checkov policy itself, because the open-source release doesn't include severities: public access and secrets are critical, missing encryption is high, logging and backups are medium, and tags and monitoring are low. Each finding adds points:</p>
+        <table class="score-table">
+          <thead><tr><th>Severity</th><th>Points</th></tr></thead>
+          <tbody>
+            <tr><td><span class="sev sev-critical">Critical</span></td><td>30</td></tr>
+            <tr><td><span class="sev sev-high">High</span></td><td>12</td></tr>
+            <tr><td><span class="sev sev-medium">Medium</span></td><td>4</td></tr>
+            <tr><td><span class="sev sev-low">Low</span></td><td>1</td></tr>
+          </tbody>
+        </table>
+        <p>The score is 100 × e<sup>−points / 80</sup>. The first serious problems cost the most, and a long list of minor warnings can't drag an otherwise sound file to zero. One critical finding gives 69, one high gives 86, and ten low ones give 88. Files Checkov doesn't support, such as Docker Compose, aren't scored.</p>
+
         <h2>Diagram check</h2>
-        <p>Gemini&nbsp;2.5&nbsp;Flash reads the image and the Terraform together. It reports resources that appear in one but not the other, subnets placed differently, and connections the security groups or route tables don't allow. It doesn't try to read things like IAM permissions or port numbers from a picture. The Terraform also goes through a normal scan.</p>
+        <p>Gemini&nbsp;2.5&nbsp;Flash reads the image and the Terraform together. It reports resources that appear in one but not the other, subnets placed differently, and connections the security groups or route tables don't allow. It doesn't try to read things like IAM permissions or port numbers from a picture. The Terraform also goes through a normal scan. A diagram check uses one of your free explained scans.</p>
 
         <h2>Your data</h2>
         <ul>
           <li>There are no accounts. The first time you visit, your browser gets a random ID in a cookie, and every scan you run is filed under it. Nobody else can list, open or search your scans, and they're never used as examples for anyone else's patch.</li>
           <li>Because history belongs to the cookie, it won't follow you to another device. Clearing your cookies loses access to it.</li>
           <li><strong>Clear history</strong> deletes your scans and findings from the database. The file copies in S3 aren't linked to your browser and aren't shown to anyone.</li>
-          <li>What you paste is processed by Groq and Google. Don't paste real passwords or keys. Swap them for placeholders first.</li>
+          <li>Checkov runs on this server. For explained scans, the file is also processed by Groq, and embeddings of the findings by Google. Don't paste real passwords or keys; swap them for placeholders first.</li>
+          <li>The free-scan counter stores a keyed hash of your IP address, not the address itself.</li>
         </ul>
 
         <h2>Limits</h2>
         <ul>
-          <li>Findings come from a language model. It can miss problems, flag things that are fine or get the severity wrong. Use it alongside static checkers such as Checkov, tfsec or Trivy, not instead of them.</li>
+          <li>Checkov only knows the policies it ships with. Passing every policy doesn't mean a file is secure.</li>
+          <li>Explanations and review findings come from a language model. They can be wrong or miss things, which is why they never change the score.</li>
           <li>Read a patch before applying it and run <code>terraform plan</code>. A rewrite can change more than the lines it marks.</li>
-          <li>Files can be up to 120,000 characters. Diagrams can be up to 8&nbsp;MB.</li>
+          <li>Files can be up to 120,000 characters. Diagrams can be up to 8&nbsp;MB. Scans are rate limited per IP address.</li>
         </ul>
 
         <h2>API</h2>
