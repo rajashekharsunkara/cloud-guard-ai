@@ -2,10 +2,9 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from langchain_core.messages import AIMessage
 
-from backend.app.core.config import settings
 from backend.app.services.agents import (
+    REVIEW_SCHEMA,
     AuditError,
     index_findings,
     review_findings,
@@ -13,6 +12,9 @@ from backend.app.services.agents import (
     run_patch_generation,
     select_review_files,
 )
+from backend.app.services.llm import LlmChoice
+
+CHOICE = LlmChoice("groq", "openai/gpt-oss-120b", "gsk_test_key_000", own_key=False)
 
 
 def finding(
@@ -32,86 +34,79 @@ def finding(
     }
 
 
-def model_returns(mock_get_llm, content):
-    llm = AsyncMock()
-    llm.ainvoke.return_value = AIMessage(content=content)
-    mock_get_llm.return_value = llm
-    return llm
-
-
 class TestReviewFindings:
 
     @pytest.mark.asyncio
-    @patch("backend.app.services.agents._get_groq_llm")
-    async def test_explanations_are_matched_by_ref(self, mock_get_llm):
+    @patch("backend.app.services.agents.llm.complete", new_callable=AsyncMock)
+    async def test_explanations_are_matched_by_ref(self, mock_complete):
         findings = [
             finding("CKV_AWS_21", "MEDIUM", "Versioning"),
             finding("CKV_AWS_20", "CRITICAL", "Public read"),
         ]
         # Findings are ranked by severity before numbering, so ref 1 is the
         # critical one even though it came second.
-        llm = model_returns(
-            mock_get_llm,
-            json.dumps(
-                {
-                    "explanations": [
-                        {
-                            "ref": 1,
-                            "description": "Anyone can list it",
-                            "remediation": "acl = private",
-                        },
-                        {
-                            "ref": 2,
-                            "description": "No history",
-                            "remediation": "enable versioning",
-                        },
-                        {"ref": 99, "description": "ignored"},
-                        "junk",
-                    ],
-                    "additional": [],
-                }
-            ),
+        mock_complete.return_value = json.dumps(
+            {
+                "explanations": [
+                    {
+                        "ref": 1,
+                        "description": "Anyone can list it",
+                        "remediation": "acl = private",
+                    },
+                    {
+                        "ref": 2,
+                        "description": "No history",
+                        "remediation": "enable versioning",
+                    },
+                    {"ref": 99, "description": "ignored"},
+                    "junk",
+                ],
+                "additional": [],
+            }
         )
 
-        explained, additional = await review_findings({"main.tf": "code"}, findings)
+        explained, additional = await review_findings(
+            CHOICE, {"main.tf": "code"}, findings, 25
+        )
 
         assert [f["check_id"] for f in explained] == ["CKV_AWS_20", "CKV_AWS_21"]
         assert explained[0]["description"] == "Anyone can list it"
         assert explained[1]["remediation"] == "enable versioning"
         assert additional == []
-        mock_get_llm.assert_called_once_with(json_mode=True)
-        prompt = llm.ainvoke.call_args.args[0][1].content
+
+        choice, _system, prompt = mock_complete.call_args.args
+        assert choice is CHOICE
+        assert mock_complete.call_args.kwargs["json_schema"] is REVIEW_SCHEMA
         assert "[1] CKV_AWS_20 (CRITICAL)" in prompt
         assert "File: main.tf\n---\ncode\n---" in prompt
 
     @pytest.mark.asyncio
-    @patch("backend.app.services.agents._get_groq_llm")
-    async def test_additional_findings_are_cleaned(self, mock_get_llm):
-        model_returns(
-            mock_get_llm,
-            json.dumps(
-                {
-                    "explanations": [],
-                    "additional": [
-                        {
-                            "severity": "high",
-                            "title": "Password in env",
-                            "resource": "web",
-                            "file": "docker-compose.yml",
-                        },
-                        {
-                            "severity": "LOW",
-                            "title": "Made-up file",
-                            "file": "../etc/passwd",
-                        },
-                        {"severity": "EXTREME", "title": "Odd severity"},
-                        {"description": "no title, dropped"},
-                        "junk",
-                    ],
-                }
-            ),
+    @patch("backend.app.services.agents.llm.complete", new_callable=AsyncMock)
+    async def test_additional_findings_are_cleaned(self, mock_complete):
+        mock_complete.return_value = json.dumps(
+            {
+                "explanations": [],
+                "additional": [
+                    {
+                        "severity": "high",
+                        "title": "Password in env",
+                        "resource": "web",
+                        "file": "docker-compose.yml",
+                    },
+                    {
+                        "severity": "LOW",
+                        "title": "Made-up file",
+                        "file": "../etc/passwd",
+                    },
+                    {"severity": "EXTREME", "title": "Odd severity"},
+                    {"description": "no title, dropped"},
+                    "junk",
+                ],
+            }
         )
-        _, additional = await review_findings({"docker-compose.yml": "code"}, [])
+        _, additional = await review_findings(
+            CHOICE, {"docker-compose.yml": "code"}, [], 25
+        )
         assert [(a["title"], a["severity"], a["file"]) for a in additional] == [
             ("Password in env", "HIGH", "docker-compose.yml"),
             ("Made-up file", "LOW", ""),
@@ -122,24 +117,34 @@ class TestReviewFindings:
         )
 
     @pytest.mark.asyncio
-    @patch("backend.app.services.agents._get_groq_llm")
-    async def test_unreadable_answer_raises(self, mock_get_llm):
-        model_returns(mock_get_llm, "This is not JSON!")
+    @patch("backend.app.services.agents.llm.complete", new_callable=AsyncMock)
+    async def test_fenced_json_is_accepted(self, mock_complete):
+        mock_complete.return_value = (
+            '```json\n{"explanations": [], "additional": []}\n```'
+        )
+        explained, _ = await review_findings(
+            CHOICE, {"main.tf": "x"}, [finding("A", "LOW")], 25
+        )
+        assert len(explained) == 1
+
+    @pytest.mark.asyncio
+    @patch("backend.app.services.agents.llm.complete", new_callable=AsyncMock)
+    async def test_unreadable_answer_raises(self, mock_complete):
+        mock_complete.return_value = "This is not JSON!"
         with pytest.raises(AuditError):
             await review_findings(
-                {"main.tf": "code"}, [finding("CKV_AWS_20", "CRITICAL")]
+                CHOICE, {"main.tf": "code"}, [finding("CKV_AWS_20", "CRITICAL")], 25
             )
 
     @pytest.mark.asyncio
-    @patch("backend.app.services.agents._get_groq_llm")
-    async def test_long_lists_are_capped(self, mock_get_llm):
-        llm = model_returns(mock_get_llm, '{"explanations": [], "additional": []}')
-        cap = settings.llm_max_explained_findings
-        findings = [finding(f"CKV_X_{i}", "LOW") for i in range(cap + 5)]
-        explained, _ = await review_findings({"main.tf": "code"}, findings)
-        prompt = llm.ainvoke.call_args.args[0][1].content
-        assert f"[{cap}]" in prompt
-        assert f"[{cap + 1}]" not in prompt
+    @patch("backend.app.services.agents.llm.complete", new_callable=AsyncMock)
+    async def test_long_lists_are_capped(self, mock_complete):
+        mock_complete.return_value = '{"explanations": [], "additional": []}'
+        findings = [finding(f"CKV_X_{i}", "LOW") for i in range(15)]
+        explained, _ = await review_findings(CHOICE, {"main.tf": "code"}, findings, 10)
+        prompt = mock_complete.call_args.args[2]
+        assert "[10]" in prompt
+        assert "[11]" not in prompt
         assert len(explained) == len(findings)
 
 
@@ -156,7 +161,9 @@ class TestSelectReviewFiles:
         assert left_out == ["a.tf"]
 
     def test_everything_fits(self):
-        included, left_out = select_review_files({"a.tf": "1", "b.tf": "2"}, [])
+        included, left_out = select_review_files(
+            {"a.tf": "1", "b.tf": "2"}, [], budget=100
+        )
         assert set(included) == {"a.tf", "b.tf"}
         assert left_out == []
 
@@ -164,27 +171,33 @@ class TestSelectReviewFiles:
 class TestOtherModelCalls:
 
     @pytest.mark.asyncio
-    @patch("backend.app.services.agents._get_groq_llm")
-    async def test_patch_generation_strips_fence(self, mock_get_llm):
-        llm = model_returns(
-            mock_get_llm, '```hcl\nresource "x" "y" { acl = "private" }\n```'
-        )
+    @patch("backend.app.services.agents.llm.complete", new_callable=AsyncMock)
+    async def test_patch_generation_strips_fence(self, mock_complete):
+        mock_complete.return_value = '```hcl\nresource "x" "y" { acl = "private" }\n```'
         result = await run_patch_generation(
+            CHOICE,
             "original",
             [{"title": "Public"}],
             [{"description": "old", "patched_code": "x"}],
             file_name="modules/s3/main.tf",
         )
         assert result.strip() == 'resource "x" "y" { acl = "private" }'
-        assert "File: modules/s3/main.tf" in llm.ainvoke.call_args.args[0][1].content
+        assert "File: modules/s3/main.tf" in mock_complete.call_args.args[2]
+        assert "json_schema" not in mock_complete.call_args.kwargs
 
     @pytest.mark.asyncio
-    @patch("backend.app.services.agents._get_gemini_llm")
-    async def test_diagram_uses_real_mime_type(self, mock_get_llm):
-        llm = model_returns(mock_get_llm, "matches")
-        assert await run_diagram_analysis("tf", b"img", "image/webp") == "matches"
-        parts = llm.ainvoke.call_args.args[0][0].content
-        assert parts[1]["image_url"]["url"].startswith("data:image/webp;base64,")
+    @patch(
+        "backend.app.services.agents.llm.complete_with_image", new_callable=AsyncMock
+    )
+    async def test_diagram_passes_image_and_type(self, mock_vision):
+        mock_vision.return_value = "matches"
+        assert (
+            await run_diagram_analysis(CHOICE, "tf code", b"img", "image/webp")
+            == "matches"
+        )
+        choice, _system, prompt, image, mime = mock_vision.call_args.args
+        assert (choice, image, mime) == (CHOICE, b"img", "image/webp")
+        assert "tf code" in prompt
 
 
 class TestIndexFindings:

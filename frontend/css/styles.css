@@ -598,6 +598,40 @@ kbd {
 .md strong { color: var(--text); }
 .md code { font-size: 0.88em; padding: 1px 5px; border-radius: 4px; background: var(--surface-2); color: var(--text); }
 
+/* Model settings */
+
+.model-btn {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 240px; height: 30px; padding: 0 10px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--surface);
+  font: 12px var(--font); color: var(--text-2); cursor: pointer;
+}
+.model-btn:hover { border-color: var(--border-strong); color: var(--text); }
+.model-btn .icon { width: 14px; height: 14px; }
+.model-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-btn[data-own="true"] { color: var(--text); border-color: var(--border-strong); }
+
+.model-dialog { width: min(520px, calc(100vw - 32px)); }
+.choice-group { border: 0; padding: 0; margin: 18px 0 0; display: grid; gap: 8px; }
+.choice {
+  display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 8px; cursor: pointer;
+}
+.choice:has(input:checked) { border-color: var(--ink); }
+.choice input { margin-top: 3px; accent-color: var(--ink); }
+.choice strong { display: block; font-size: 14px; font-weight: 600; }
+.choice small { display: block; font-size: 13px; color: var(--text-3); margin-top: 1px; }
+.own-key-fields { display: grid; gap: 6px; margin-top: 16px; }
+.own-key-fields .field-label { margin-top: 8px; display: flex; justify-content: space-between; }
+.own-key-fields select.text-field { font-family: var(--font); }
+.key-link { font-weight: 400; font-size: 13px; }
+.key-row { display: flex; gap: 8px; }
+.key-row .text-field { flex: 1; min-width: 0; }
+.key-row .btn { height: 40px; }
+.check { display: flex; gap: 8px; align-items: center; margin-top: 10px; font-size: 14px; }
+.check input { accent-color: var(--ink); }
+.key-privacy { margin-top: 6px; }
+.danger-text { color: var(--critical); }
+
 /* Dialog and toasts */
 
 .dialog {
@@ -648,6 +682,7 @@ kbd {
   }
   .site-nav::-webkit-scrollbar { display: none; }
   .status-text { display: none; }
+  .model-btn { max-width: 150px; }
   main.container { padding-top: 24px; }
   .view-head h1 { font-size: 21px; }
   .view-head.with-action { flex-direction: column; gap: 12px; }

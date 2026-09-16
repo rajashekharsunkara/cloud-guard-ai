@@ -65,7 +65,8 @@ class RepoRequest(BaseModel):
 class ScanAnalysis(BaseModel):
     mode: str = Field(
         default="static",
-        description="static: Checkov only; free: explained on the server's free tier",
+        description="static: Checkov only; free: explained on the server's free "
+        "tier; own_key: explained with the visitor's own API key",
     )
     source: str = Field(default="paste", description="paste, zip or github")
     checkov_version: str = ""
@@ -73,6 +74,9 @@ class ScanAnalysis(BaseModel):
     frameworks: list[str] = []
     notices: list[str] = []
     free_scans_left: int = 0
+    model: Optional[dict] = Field(
+        default=None, description="Provider and model that explained the scan"
+    )
 
 
 class AuditResult(BaseModel):
@@ -141,3 +145,25 @@ class UsageResponse(BaseModel):
     explanations_available: bool
     free_scans_per_day: int
     free_scans_left: int
+
+
+class ProviderInfo(BaseModel):
+    id: str
+    label: str
+    key_url: str = ""
+
+
+class ModelListRequest(BaseModel):
+    provider: str = Field(..., max_length=40)
+
+
+class ModelOption(BaseModel):
+    id: str
+    vision: Optional[bool] = Field(
+        default=None, description="Accepts images; null when the provider doesn't say"
+    )
+
+
+class ModelListResponse(BaseModel):
+    models: list[ModelOption] = []
+    default: Optional[str] = None

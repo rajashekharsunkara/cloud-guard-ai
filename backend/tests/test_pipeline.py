@@ -5,6 +5,7 @@ import pytest
 
 from backend.app.services.agents import AuditError
 from backend.app.services.checkov import CheckovReport, ScannerError, parse_report
+from backend.app.services.llm import LlmChoice, LlmError
 from backend.app.services.pipeline import Scan, ScanFailed, ScanInput, run_to_completion
 
 FIXTURE = Path(__file__).parent / "fixtures" / "checkov_sample.json"
@@ -73,7 +74,7 @@ async def test_static_only_when_explanations_unavailable(mock_checkov):
     assert result["security_score"] == 4
     assert len(result["vulnerabilities"]) == 34
     assert result["patched_code"] == ""
-    assert "aren't available on this server" in result["analysis"]["notices"][0]
+    assert "doesn't offer free explanations" in result["analysis"]["notices"][0]
     db.save_audit.assert_awaited_once()
     assert db.save_audit.call_args.kwargs["analysis"]["mode"] == "static"
 
@@ -269,22 +270,29 @@ def multi_file_findings():
     ]
 
 
-def test_files_to_patch_ranks_and_caps(monkeypatch):
-    from backend.app.core.config import settings
-    from backend.app.services.pipeline import files_to_patch
+def test_files_to_patch_ranks_and_caps():
+    from backend.app.services.pipeline import Budget, files_to_patch
 
-    monkeypatch.setattr(settings, "llm_max_patched_files", 5)
-    monkeypatch.setattr(settings, "llm_patch_max_file_chars", 100)
+    budget = Budget(
+        review_chars=1000,
+        explained=10,
+        patched_files=5,
+        patch_file_chars=100,
+        patch_concurrency=1,
+    )
     files = {f"{k}.tf": "x" for k in "abcdefg"}
     files["c.tf"] = "x" * 101  # too large to rewrite
-    assert files_to_patch(files, multi_file_findings()) == [
+    assert files_to_patch(files, multi_file_findings(), budget) == [
         "b.tf",
         "g.tf",
         "d.tf",
         "a.tf",
         "e.tf",
     ]
-    assert files_to_patch(files, [{"file": "not-scanned.tf", "severity": "HIGH"}]) == []
+    assert (
+        files_to_patch(files, [{"file": "not-scanned.tf", "severity": "HIGH"}], budget)
+        == []
+    )
 
 
 @pytest.mark.asyncio
@@ -314,7 +322,7 @@ async def test_multi_file_scan(
     mock_review.return_value = (findings, [])
     mock_similar.return_value = []
 
-    async def fake_patch(content, context, similar, file_name):
+    async def fake_patch(choice, content, context, similar, file_name):
         if file_name == "c.tf":
             raise RuntimeError("provider hiccup")
         return f"patched {file_name}"
@@ -344,9 +352,10 @@ async def test_multi_file_scan(
     # Each patch only sees its own file's findings.
     for call in mock_patch.call_args_list:
         path = call.kwargs["file_name"]
-        assert all(ctx["check_id"] for ctx in call.args[1])
-        assert len(call.args[1]) == 1
-        assert call.args[0] == files[path]
+        assert call.args[0].provider == "groq"
+        assert all(ctx["check_id"] for ctx in call.args[2])
+        assert len(call.args[2]) == 1
+        assert call.args[1] == files[path]
 
     saved = db.save_audit.call_args.kwargs
     assert saved["files"] == sorted(files)
@@ -354,19 +363,18 @@ async def test_multi_file_scan(
     assert len(saved["patches"]) == 4
 
 
-class FakeRateLimit(Exception):
-    status_code = 413
-
-    def __str__(self):
-        return "Request too large ... tokens per minute (TPM) ... 'code': 'rate_limit_exceeded'"
+def own_choice(provider="openai", model="gpt-5.6-terra"):
+    return LlmChoice(provider, model, "sk-test-key-123456", own_key=True)
 
 
 @pytest.mark.asyncio
 @patch("backend.app.services.pipeline.agents.review_findings", new_callable=AsyncMock)
 @patch("backend.app.services.pipeline.run_checkov")
-async def test_rate_limited_review_says_so(mock_checkov, mock_review):
+async def test_rate_limited_free_review_says_so(mock_checkov, mock_review):
     mock_checkov.return_value = sample_report()
-    mock_review.side_effect = FakeRateLimit()
+    mock_review.side_effect = LlmError(
+        "rate_limit", "Groq rate limit or quota reached.", 413
+    )
     quota = FakeQuota()
     _, result = await events_and_result(
         Scan(ScanInput.single("c", "main.tf"), fake_db(), quota, "ws")
@@ -375,16 +383,89 @@ async def test_rate_limited_review_says_so(mock_checkov, mock_review):
     assert "per-minute limit" in result["analysis"]["notices"][0]
 
 
-def test_is_rate_limited():
-    from backend.app.services.pipeline import is_rate_limited
+@pytest.mark.asyncio
+@patch(
+    "backend.app.services.pipeline.agents.run_patch_generation", new_callable=AsyncMock
+)
+@patch(
+    "backend.app.services.pipeline.agents.find_similar_patches", new_callable=AsyncMock
+)
+@patch("backend.app.services.pipeline.agents.review_findings", new_callable=AsyncMock)
+@patch("backend.app.services.pipeline.run_checkov")
+async def test_own_key_skips_quota_and_uses_bigger_budget(
+    mock_checkov, mock_review, mock_similar, mock_patch
+):
+    report = sample_report()
+    mock_checkov.return_value = report
+    mock_review.return_value = (report.findings, [])
+    mock_similar.return_value = []
+    mock_patch.return_value = "patched"
+    quota = FakeQuota(available=False, left=0)
+    choice = own_choice()
 
-    class Err(Exception):
-        def __init__(self, status, text):
-            super().__init__(text)
-            self.status_code = status
+    _, result = await events_and_result(
+        Scan(
+            ScanInput.single("c", "main.tf"), fake_db(), quota, "ws", own_choice=choice
+        )
+    )
 
-    assert is_rate_limited(Err(429, "Too Many Requests"))
-    assert is_rate_limited(Err(413, "rate_limit_exceeded: TPM"))
-    assert not is_rate_limited(Err(413, "payload too large for context"))
-    assert not is_rate_limited(Err(500, "rate_limit"))
-    assert not is_rate_limited(ValueError("bad json"))
+    assert result["analysis"]["mode"] == "own_key"
+    assert result["analysis"]["model"] == {
+        "provider": "OpenAI",
+        "model": "gpt-5.6-terra",
+    }
+    assert result["analysis"]["notices"] == []
+    review_call = mock_review.call_args
+    assert review_call.args[0] is choice
+    assert review_call.args[3] == 60  # own-key explanation budget
+    assert mock_patch.call_args.args[0] is choice
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error, expected",
+    [
+        (
+            LlmError("auth", "OpenAI rejected the API key.", 401),
+            "Your OpenAI key was rejected",
+        ),
+        (LlmError("not_found", "x", 404), "can't use gpt-5.6-terra"),
+        (LlmError("rate_limit", "x", 429), "hit a rate limit or ran out of quota"),
+    ],
+)
+@patch("backend.app.services.pipeline.agents.review_findings", new_callable=AsyncMock)
+@patch("backend.app.services.pipeline.run_checkov")
+async def test_own_key_failures_are_explained(
+    mock_checkov, mock_review, error, expected, caplog
+):
+    mock_checkov.return_value = sample_report()
+    mock_review.side_effect = error
+    quota = FakeQuota()
+    _, result = await events_and_result(
+        Scan(
+            ScanInput.single("c", "main.tf"),
+            fake_db(),
+            quota,
+            "ws",
+            own_choice=own_choice(),
+        )
+    )
+    assert not quota.refunded
+    assert result["analysis"]["mode"] == "static"
+    assert expected in result["analysis"]["notices"][0]
+    assert len(result["vulnerabilities"]) == 34
+    assert "sk-test-key" not in caplog.text
+
+
+@pytest.mark.asyncio
+@patch("backend.app.services.pipeline.run_checkov")
+async def test_free_tier_needs_server_key(mock_checkov, monkeypatch):
+    from backend.app.core.config import settings
+
+    monkeypatch.setattr(settings, "groq_api_key", "")
+    mock_checkov.return_value = sample_report()
+    _, result = await events_and_result(
+        Scan(ScanInput.single("c", "main.tf"), fake_db(), FakeQuota(), "ws")
+    )
+    assert result["analysis"]["mode"] == "static"
+    assert "add your own api key" in result["analysis"]["notices"][0].lower()

@@ -1,18 +1,18 @@
 # CloudGuard
 
-Scans infrastructure code for security issues: a pasted file, a zip, or a public GitHub repository. [Checkov](https://www.checkov.io/) finds the problems and decides the score, so results are the same on every run; an LLM (gpt-oss-120b on Groq) then explains each finding, flags issues no policy covers, and writes patched files. A local embedding model (bge-small via fastembed) and pgvector retrieve earlier fixes as examples, and Gemini compares architecture diagrams with the code.
+Scans infrastructure code for security issues: a pasted file, a zip, or a public GitHub repository. [Checkov](https://www.checkov.io/) finds the problems and decides the score, so results are the same on every run; a language model then explains each finding, flags issues no policy covers, and writes patched files. A local embedding model (bge-small via fastembed) and pgvector retrieve earlier fixes as examples, and a vision-capable model compares architecture diagrams with the code.
 
-Checkov results are free and unlimited. Explained scans use the server's Groq key and are capped per visitor per day.
+Checkov results are free and unlimited. Explained scans run on the server's Groq key (gpt-oss-120b), capped per visitor per day, or on the visitor's own OpenAI, Anthropic, Google, xAI, Groq or Mistral key with no cap. Visitor keys stay in the browser and are sent per request as `X-LLM-Provider`, `X-LLM-Model` and `X-LLM-Key` headers; the server never stores or logs them, and provider base URLs are fixed server-side.
 
 **[Live demo](https://cloud-guard-ai.duckdns.org)** — running on AWS.
 
 ## Running locally
 
-You'll need Docker (or Podman), a [Groq API key](https://console.groq.com/) and a [Gemini API key](https://aistudio.google.com/).
+You'll need Docker (or Podman). A [Groq API key](https://console.groq.com/) enables free explained scans; without one, scans show Checkov results unless visitors add their own key.
 
 ```bash
 cp .env.example .env
-# fill in GROQ_API_KEY and GEMINI_API_KEY
+# fill in GROQ_API_KEY for free explained scans (optional)
 docker compose up --build
 ```
 
@@ -24,11 +24,13 @@ Dashboard is at `http://localhost:8000`. Swagger at `/docs`. Postgres and a Loca
 |--------|----------|-------------|
 | `GET` | `/api/health` | DB + S3 status |
 | `GET` | `/api/usage` | Free explained scans left today for this client |
+| `GET` | `/api/llm/providers` | Providers usable with a visitor's own key |
+| `POST` | `/api/llm/models` | Check a key (`X-LLM-Key` header) and list the chat models it can use |
 | `POST` | `/api/audit` | Checkov scan, explained and patched when the free tier allows; JSON response |
 | `POST` | `/api/audit/stream` | Same pipeline, streamed as SSE |
 | `POST` | `/api/audit/archive` | Scan a zip upload (multipart field `archive`), streamed as SSE |
 | `POST` | `/api/audit/repo` | Scan a public GitHub repo or folder (`{"url": ...}`), streamed as SSE |
-| `POST` | `/api/audit/diagram` | Audit + architecture diagram drift check |
+| `POST` | `/api/audit/diagram` | Audit + architecture diagram drift check; needs the own-key headers |
 | `POST` | `/api/search` | Semantic search over your past findings |
 | `GET` | `/api/history` | Your recent scans |
 | `GET` | `/api/history/{audit_id}` | One scan with findings, original and patched file |
@@ -43,7 +45,6 @@ Everything is set through environment variables (see `.env.example`):
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `GROQ_API_KEY` | — | explained scans and patches; without it scans are Checkov only |
-| `GEMINI_API_KEY` | — | diagram check only |
 | `DATABASE_URL` | local Postgres | any Postgres 15+ with the pgvector extension |
 | `AWS_ENDPOINT_URL` | unset | set to a LocalStack URL for dev; leave unset for real AWS |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | unset | leave empty on AWS to use the IAM role |
@@ -80,7 +81,6 @@ The simplest setup is a single EC2 instance with Docker, using RDS-style managed
    ```bash
    APP_ENV=production
    GROQ_API_KEY=...           # real keys
-   GEMINI_API_KEY=...
    POSTGRES_PASSWORD=...      # generate a strong one
    AWS_ENDPOINT_URL=          # empty: use real AWS
    AWS_ACCESS_KEY_ID=         # empty: use the IAM role

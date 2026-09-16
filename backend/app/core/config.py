@@ -20,7 +20,6 @@ class Settings(BaseSettings):
     cors_origins: str = Field(default="*", description="Allowed CORS origins")
 
     groq_api_key: str = Field(default="", description="Groq API key")
-    gemini_api_key: str = Field(default="", description="Google Gemini API key")
 
     database_url: str = Field(
         default="postgresql+asyncpg://cloudguard:cloudguard_secret@localhost:5432/cloudguard_db",

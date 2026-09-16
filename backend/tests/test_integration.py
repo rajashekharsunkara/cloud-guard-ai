@@ -249,3 +249,95 @@ class TestAPIIntegration:
             assert '"step": "error"' in events[-1]
         finally:
             app.dependency_overrides.clear()
+
+
+class TestOwnKeyEndpoints:
+
+    def setup_method(self):
+        async def override_get_db():
+            yield AsyncMock()
+
+        app.dependency_overrides[get_db] = override_get_db
+
+    def teardown_method(self):
+        app.dependency_overrides.clear()
+
+    def test_providers_listed(self):
+        response = client.get("/api/llm/providers")
+        assert response.status_code == 200
+        ids = [p["id"] for p in response.json()]
+        assert ids == ["openai", "anthropic", "google", "xai", "groq", "mistral"]
+
+    @patch("backend.app.routers.auditor.llm.list_models", new_callable=AsyncMock)
+    def test_model_list_uses_header_key(self, mock_list):
+        mock_list.return_value = {
+            "models": [{"id": "claude-opus-5", "vision": True}],
+            "default": "claude-opus-5",
+        }
+        response = client.post(
+            "/api/llm/models",
+            json={"provider": "anthropic"},
+            headers={"X-LLM-Key": "sk-ant-test-123"},
+        )
+        assert response.status_code == 200
+        assert response.json()["default"] == "claude-opus-5"
+        mock_list.assert_awaited_once_with("anthropic", "sk-ant-test-123")
+
+    @patch("backend.app.routers.auditor.llm.list_models", new_callable=AsyncMock)
+    def test_rejected_key_is_400_without_echoing_it(self, mock_list):
+        from backend.app.services.llm import LlmError
+
+        mock_list.side_effect = LlmError("auth", "OpenAI rejected the API key.", 401)
+        response = client.post(
+            "/api/llm/models",
+            json={"provider": "openai"},
+            headers={"X-LLM-Key": "sk-secret-value-1"},
+        )
+        assert response.status_code == 400
+        assert response.json()["detail"] == "OpenAI rejected the API key."
+        assert "sk-secret" not in response.text
+
+    @patch("backend.app.routers.auditor.run_to_completion", new_callable=AsyncMock)
+    def test_scan_passes_own_choice(self, mock_run):
+        mock_run.return_value = {
+            "audit_id": "a1",
+            "file_name": "main.tf",
+            "security_score": 100,
+            "vulnerabilities": [],
+            "patched_code": "",
+            "analysis": {"mode": "own_key"},
+        }
+        response = client.post(
+            "/api/audit",
+            json={"iac_content": 'resource "x" "y" { a = 1 }'},
+            headers={
+                "X-LLM-Provider": "xai",
+                "X-LLM-Model": "grok-4.6",
+                "X-LLM-Key": "xai-test-key-1",
+            },
+        )
+        assert response.status_code == 200
+        scan = mock_run.call_args.args[0]
+        assert (scan.own_choice.provider, scan.own_choice.model) == ("xai", "grok-4.6")
+
+    def test_bad_own_key_headers_are_400(self):
+        response = client.post(
+            "/api/audit",
+            json={"iac_content": 'resource "x" "y" { a = 1 }'},
+            headers={
+                "X-LLM-Provider": "somewhere-else",
+                "X-LLM-Model": "m",
+                "X-LLM-Key": "abcdefgh1",
+            },
+        )
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Unknown model provider."
+
+    def test_diagram_needs_own_key(self):
+        response = client.post(
+            "/api/audit/diagram",
+            data={"iac_content": 'resource "x" "y" { a = 1 }'},
+            files={"diagram": ("d.png", b"\x89PNG", "image/png")},
+        )
+        assert response.status_code == 400
+        assert "own API key" in response.json()["detail"]

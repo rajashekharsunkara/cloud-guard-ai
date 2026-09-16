@@ -30,6 +30,7 @@
       <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 00-2-2H6a2 2 0 00-2 2v8a2 2 0 002 2h2"/></symbol>
       <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19.5h14"/></symbol>
       <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15.5V4.5M7.5 9L12 4.5 16.5 9M5 19.5h14"/></symbol>
+      <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L20 3M16 7l3 3M14 9l2 2"/></symbol>
       <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></symbol>
     </defs>
   </svg>
@@ -49,6 +50,10 @@
       </nav>
 
       <div class="header-tools">
+        <button class="model-btn" id="btn-model" type="button" title="Model settings">
+          <svg class="icon"><use href="#i-key"/></svg>
+          <span id="model-label">Free tier</span>
+        </button>
         <span class="status" id="status" data-state="unknown" title="Checking service status">
           <span class="status-dot"></span><span class="status-text">Checking</span>
         </span>
@@ -142,7 +147,7 @@
     <section class="view" id="view-diagram" data-title="Diagram check" hidden>
       <div class="view-head">
         <h1>Diagram check</h1>
-        <p>Upload an architecture diagram with the Terraform that's meant to build it. CloudGuard reports resources and connections that don't match, then runs the usual security scan on the code.</p>
+        <p>Upload an architecture diagram with the Terraform that's meant to build it. CloudGuard reports resources and connections that don't match, then runs the usual security scan on the code. Diagram checks use your own API key with a model that can read images. <button class="link-btn inline" type="button" data-open-model>Model settings</button></p>
       </div>
 
       <div class="diagram-grid">
@@ -214,7 +219,7 @@
           </li>
           <li>
             <h3>The findings get explained</h3>
-            <p>The file and Checkov's findings go to gpt-oss-120b, OpenAI's open-weight model running on Groq. For each finding it says what is actually at risk in your file and which setting to change. It also points out problems no policy covers, such as passwords in a Docker Compose file. Those are listed separately and don't affect the score.</p>
+            <p>The files and Checkov's findings go to a language model: gpt-oss-120b on Groq for free explained scans, or the model you pick with your own API key. For each finding it says what is actually at risk in your code and which setting to change. It also points out problems no policy covers, such as passwords in a Docker Compose file. Those are listed separately and don't affect the score.</p>
           </li>
           <li>
             <h3>Earlier fixes are checked</h3>
@@ -230,8 +235,9 @@
           </li>
         </ol>
 
-        <h2>Free explained scans</h2>
-        <p>Checkov results are always free. Explanations, extra review findings, patches and diagram checks use a paid model, so each visitor gets a few explained scans per day. After that, scans still run Checkov and show every finding, just without explanations or a patch.</p>
+        <h2>Free explained scans and your own key</h2>
+        <p>Checkov results are always free. Explanations, extra review findings and patches use a language model, so each visitor gets a few explained scans per day on this site's Groq account. After that, scans still run Checkov and show every finding, just without explanations or patches.</p>
+        <p>You can also use your own API key from OpenAI, Anthropic, Google, xAI, Groq or Mistral in <button class="link-btn inline" type="button" data-open-model>Model settings</button>. CloudGuard lists the models your key can use and suggests one. Scans with your key have no daily limit, cover larger projects, and are billed to your account by the provider. Diagram checks always use your own key.</p>
 
         <h2>How the score works</h2>
         <p>Only Checkov findings count, so the score is the same every time you scan the same file. CloudGuard rates each Checkov policy itself, because the open-source release doesn't include severities: public access and secrets are critical, missing encryption is high, logging and backups are medium, and tags and monitoring are low. Each finding adds points:</p>
@@ -247,14 +253,15 @@
         <p>The score is 100 × e<sup>−points / 80</sup>. The first serious problems cost the most, and a long list of minor warnings can't drag an otherwise sound file to zero. One critical finding gives 69, one high gives 86, and ten low ones give 88. Files Checkov doesn't support, such as Docker Compose, aren't scored.</p>
 
         <h2>Diagram check</h2>
-        <p>Gemini&nbsp;2.5&nbsp;Flash reads the image and the Terraform together. It reports resources that appear in one but not the other, subnets placed differently, and connections the security groups or route tables don't allow. It doesn't try to read things like IAM permissions or port numbers from a picture. The Terraform also goes through a normal scan. A diagram check uses one of your free explained scans.</p>
+        <p>The model you chose in Model settings reads the image and the Terraform together, so it has to be one that accepts images. It reports resources that appear in one but not the other, subnets placed differently, and connections the security groups or route tables don't allow. It doesn't try to read things like IAM permissions or port numbers from a picture. The Terraform also goes through a normal scan. A diagram check uses one of your free explained scans.</p>
 
         <h2>Your data</h2>
         <ul>
           <li>There are no accounts. The first time you visit, your browser gets a random ID in a cookie, and every scan you run is filed under it. Nobody else can list, open or search your scans, and they're never used as examples for anyone else's patch.</li>
           <li>Because history belongs to the cookie, it won't follow you to another device. Clearing your cookies loses access to it.</li>
           <li><strong>Clear history</strong> deletes your scans and findings from the database. The file copies in S3 aren't linked to your browser and aren't shown to anyone.</li>
-          <li>Checkov and the embedding model run on this server. For explained scans, the files are also processed by Groq, and diagrams by Google. Don't include real passwords or keys; swap them for placeholders first.</li>
+          <li>Checkov and the embedding model run on this server. For explained scans, the files are also sent to the model provider: Groq on the free tier, or whichever provider your own key belongs to. Don't include real passwords or keys in what you scan; swap them for placeholders first.</li>
+          <li>If you add your own API key, it's kept in this browser (or only for the session if you untick "Remember on this device") and sent with each scan over HTTPS. The server hands it to the provider for that request and never stores or logs it. <strong>Forget key</strong> in Model settings removes it.</li>
           <li>Repositories are downloaded from GitHub for the scan and not kept, apart from the files saved with your scan.</li>
           <li>The free-scan counter stores a keyed hash of your IP address, not the address itself.</li>
         </ul>
@@ -274,6 +281,54 @@
     </section>
 
   </main>
+
+  <dialog class="dialog model-dialog" id="model-dialog">
+    <form id="model-form">
+      <h2>Model settings</h2>
+      <p>Choose what explains findings and writes patches. Checkov runs the same either way.</p>
+
+      <fieldset class="choice-group">
+        <legend class="sr-only">Model source</legend>
+        <label class="choice">
+          <input type="radio" name="model-mode" value="free" checked>
+          <span><strong>Free tier</strong><small id="free-tier-note">A few explained scans a day on this site's Groq key.</small></span>
+        </label>
+        <label class="choice">
+          <input type="radio" name="model-mode" value="own">
+          <span><strong>My own API key</strong><small>No daily limit. Needed for diagram checks.</small></span>
+        </label>
+      </fieldset>
+
+      <div class="own-key-fields" id="own-key-fields" hidden>
+        <label class="field-label" for="llm-provider">Provider</label>
+        <select class="text-field" id="llm-provider"></select>
+
+        <label class="field-label" for="llm-key">API key <a class="key-link" id="llm-key-link" href="#" target="_blank" rel="noopener noreferrer">Get a key</a></label>
+        <div class="key-row">
+          <input class="text-field" id="llm-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key">
+          <button class="btn btn-quiet" id="btn-load-models" type="button">Check key</button>
+        </div>
+
+        <label class="field-label" for="llm-model">Model</label>
+        <select class="text-field" id="llm-model" disabled><option>Check your key to load models</option></select>
+        <p class="field-help" id="llm-model-note"></p>
+
+        <label class="check">
+          <input type="checkbox" id="llm-remember" checked>
+          <span>Remember on this device</span>
+        </label>
+
+        <p class="field-help key-privacy">Your key stays in this browser and is sent over HTTPS with each scan. The server passes it to the provider for that scan and never stores or logs it. Usage is billed to your account by the provider.</p>
+      </div>
+
+      <div class="dialog-actions">
+        <button class="btn btn-quiet danger-text" id="btn-forget-key" type="button" hidden>Forget key</button>
+        <span class="spacer"></span>
+        <button class="btn btn-quiet" type="button" id="btn-model-cancel">Cancel</button>
+        <button class="btn btn-primary" type="submit">Save</button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog class="dialog" id="confirm-clear">
     <form method="dialog">

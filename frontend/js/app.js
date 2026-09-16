@@ -479,7 +479,8 @@ async function runScan() {
 
   const context = { result: null };
   try {
-    const res = await fetch(request.url, request.init);
+    const init = { ...request.init, headers: { ...(request.init.headers || {}), ...llmHeaders() } };
+    const res = await fetch(request.url, init);
     if (!res.ok) throw await apiError(res, "The scan couldn't start.");
 
     await readEventStream(res, (event) => handleStreamEvent(event, context));
@@ -502,19 +503,212 @@ async function runScan() {
 
 $("btn-scan").addEventListener("click", runScan);
 
+/* Model settings */
+
+const LLM_STORAGE = "cg-llm";
+const providers = { list: [], loaded: false };
+
+function readLlmSettings() {
+  for (const storage of ["localStorage", "sessionStorage"]) {
+    try {
+      const raw = window[storage].getItem(LLM_STORAGE);
+      if (raw) return JSON.parse(raw);
+    } catch {
+      // Unavailable or corrupt storage just means no saved key.
+    }
+  }
+  return null;
+}
+
+function writeLlmSettings(value, remember) {
+  for (const storage of ["localStorage", "sessionStorage"]) {
+    try { window[storage].removeItem(LLM_STORAGE); } catch { /* ignore */ }
+  }
+  if (!value) return;
+  try {
+    window[remember ? "localStorage" : "sessionStorage"].setItem(LLM_STORAGE, JSON.stringify(value));
+  } catch {
+    toast("This browser won't store the key, so it will be forgotten on reload.", "error");
+  }
+}
+
+let llmSettings = readLlmSettings();
+
+function llmHeaders() {
+  if (!llmSettings) return {};
+  return {
+    "X-LLM-Provider": llmSettings.provider,
+    "X-LLM-Model": llmSettings.model,
+    "X-LLM-Key": llmSettings.key,
+  };
+}
+
+function providerLabel(id) {
+  const found = providers.list.find((p) => p.id === id);
+  return found ? found.label : id;
+}
+
+function syncModelButton() {
+  const btn = $("btn-model");
+  if (llmSettings) {
+    $("model-label").textContent = `${providerLabel(llmSettings.provider)} · ${llmSettings.model}`;
+    btn.dataset.own = "true";
+  } else {
+    $("model-label").textContent = "Free tier";
+    btn.dataset.own = "false";
+  }
+  showUsage();
+}
+
+async function loadProviders() {
+  if (providers.loaded) return;
+  const res = await fetch(`${API}/llm/providers`);
+  providers.list = await res.json();
+  providers.loaded = true;
+  $("llm-provider").innerHTML = providers.list
+    .map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.label)}</option>`).join("");
+}
+
+function setModelMode(mode) {
+  document.querySelector(`input[name="model-mode"][value="${mode}"]`).checked = true;
+  $("own-key-fields").hidden = mode !== "own";
+}
+
+function resetModelList(message) {
+  $("llm-model").innerHTML = `<option value="">${escapeHtml(message)}</option>`;
+  $("llm-model").disabled = true;
+  $("llm-model-note").textContent = "";
+}
+
+function updateKeyLink() {
+  const provider = providers.list.find((p) => p.id === $("llm-provider").value);
+  $("llm-key-link").href = provider ? provider.key_url : "#";
+}
+
+async function openModelDialog() {
+  try {
+    await loadProviders();
+  } catch {
+    toast("Couldn't load the provider list.", "error");
+    return;
+  }
+  setModelMode(llmSettings ? "own" : "free");
+  $("btn-forget-key").hidden = !llmSettings;
+  if (llmSettings) {
+    $("llm-provider").value = llmSettings.provider;
+    $("llm-key").value = llmSettings.key;
+    $("llm-remember").checked = llmSettings.remember !== false;
+    $("llm-model").innerHTML = `<option value="${escapeHtml(llmSettings.model)}">${escapeHtml(llmSettings.model)}</option>`;
+    $("llm-model").disabled = false;
+  } else {
+    $("llm-key").value = "";
+    resetModelList("Check your key to load models");
+  }
+  updateKeyLink();
+  $("model-dialog").showModal();
+}
+
+$("btn-model").addEventListener("click", openModelDialog);
+document.querySelectorAll("[data-open-model]").forEach((el) => el.addEventListener("click", openModelDialog));
+$("btn-model-cancel").addEventListener("click", () => $("model-dialog").close());
+
+document.querySelectorAll('input[name="model-mode"]').forEach((radio) => {
+  radio.addEventListener("change", () => setModelMode(radio.value));
+});
+
+$("llm-provider").addEventListener("change", () => {
+  updateKeyLink();
+  resetModelList("Check your key to load models");
+});
+$("llm-key").addEventListener("input", () => resetModelList("Check your key to load models"));
+
+$("btn-load-models").addEventListener("click", async () => {
+  const provider = $("llm-provider").value;
+  const key = $("llm-key").value.trim();
+  if (key.length < 8) {
+    toast("Paste your API key first.", "error");
+    return;
+  }
+  const btn = $("btn-load-models");
+  setBusy(btn, true, "Checking");
+  try {
+    const res = await fetch(`${API}/llm/models`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-LLM-Key": key },
+      body: JSON.stringify({ provider }),
+    });
+    if (!res.ok) throw await apiError(res, "The key couldn't be checked.");
+    const data = await res.json();
+    if (!data.models.length) throw new Error("This key has no chat models available.");
+    $("llm-model").innerHTML = data.models.map((m) =>
+      `<option value="${escapeHtml(m.id)}" data-vision="${m.vision}"${m.id === data.default ? " selected" : ""}>${escapeHtml(m.id)}</option>`).join("");
+    $("llm-model").disabled = false;
+    describeModel();
+    toast(`Key works · ${plural(data.models.length, "model")} available`);
+  } catch (err) {
+    resetModelList("Check your key to load models");
+    toast(err.message, "error");
+  } finally {
+    setBusy(btn, false);
+  }
+});
+
+function describeModel() {
+  const option = $("llm-model").selectedOptions[0];
+  const vision = option && option.dataset.vision;
+  $("llm-model-note").textContent = vision === "false"
+    ? "This model can't read images, so it won't work for diagram checks."
+    : "";
+}
+
+$("llm-model").addEventListener("change", describeModel);
+
+$("model-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const mode = document.querySelector('input[name="model-mode"]:checked').value;
+  if (mode === "free") {
+    llmSettings = null;
+    writeLlmSettings(null);
+  } else {
+    const model = $("llm-model").value;
+    const key = $("llm-key").value.trim();
+    if (!model || $("llm-model").disabled) {
+      toast("Check your key and pick a model first.", "error");
+      return;
+    }
+    const remember = $("llm-remember").checked;
+    llmSettings = { provider: $("llm-provider").value, model, key, remember };
+    writeLlmSettings(llmSettings, remember);
+  }
+  syncModelButton();
+  $("model-dialog").close();
+  toast(llmSettings ? `Using your ${providerLabel(llmSettings.provider)} key` : "Using the free tier");
+});
+
+$("btn-forget-key").addEventListener("click", () => {
+  llmSettings = null;
+  writeLlmSettings(null);
+  syncModelButton();
+  $("model-dialog").close();
+  toast("Key removed from this browser");
+});
+
 /* Free explained scans */
 
 function usageText(explanationsAvailable, left, perDay) {
-  if (!explanationsAvailable) return "Checkov results only";
+  if (!explanationsAvailable) return "Checkov results only · add your own key for explanations";
   if (left === 0) return "Free explanations used up today · Checkov results still run";
   return `${left} of ${perDay} free explained scans left today`;
 }
 
-const usage = { perDay: 0, available: false };
+const usage = { perDay: 0, available: false, left: null };
 
 function showUsage(analysis) {
-  if (analysis && usage.available) {
-    $("usage-hint").textContent = usageText(true, analysis.free_scans_left, usage.perDay);
+  if (analysis && typeof analysis.free_scans_left === "number") usage.left = analysis.free_scans_left;
+  if (llmSettings) {
+    $("usage-hint").textContent = `Using your ${providerLabel(llmSettings.provider)} key · ${llmSettings.model}`;
+  } else if (usage.left !== null) {
+    $("usage-hint").textContent = usageText(usage.available, usage.left, usage.perDay);
   }
 }
 
@@ -525,7 +719,11 @@ async function loadUsage() {
     const data = await res.json();
     usage.perDay = data.free_scans_per_day;
     usage.available = data.explanations_available;
-    $("usage-hint").textContent = usageText(data.explanations_available, data.free_scans_left, data.free_scans_per_day);
+    usage.left = data.free_scans_left;
+    $("free-tier-note").textContent = data.explanations_available
+      ? `${data.free_scans_per_day} explained scans a day on this site's Groq key.`
+      : "Not offered on this server. Scans show Checkov results only.";
+    showUsage();
   } catch {
     // The hint is optional; scans still work without it.
   }
@@ -635,6 +833,10 @@ function renderReport(container, result) {
   if (result.audit_id) meta.push(`Scan <code>${escapeHtml(result.audit_id)}</code>`);
   if ((result.files || []).length > 1) meta.push(plural(result.files.length, "file") + " scanned");
   if (analysis && analysis.checkov_version) meta.push(`Checkov ${escapeHtml(analysis.checkov_version)}`);
+  if (analysis && analysis.model) {
+    const source = analysis.mode === "own_key" ? "your key" : "free tier";
+    meta.push(`Explained by ${escapeHtml(analysis.model.provider)} ${escapeHtml(analysis.model.model)} (${source})`);
+  }
 
   container.innerHTML = `
     <div class="report-head">
@@ -940,6 +1142,11 @@ $("btn-compare").addEventListener("click", async () => {
     toast("Choose a diagram to compare against.", "error");
     return;
   }
+  if (!llmSettings) {
+    toast("Diagram checks need your own API key.", "error");
+    openModelDialog();
+    return;
+  }
 
   const btn = $("btn-compare");
   setBusy(btn, true, "Comparing");
@@ -950,7 +1157,7 @@ $("btn-compare").addEventListener("click", async () => {
   form.append("diagram", diagramFile);
 
   try {
-    const res = await fetch(`${API}/audit/diagram`, { method: "POST", body: form });
+    const res = await fetch(`${API}/audit/diagram`, { method: "POST", body: form, headers: llmHeaders() });
     if (!res.ok) throw await apiError(res, "The comparison failed.");
     const result = await res.json();
     historyCache.stale = true;
@@ -1127,4 +1334,5 @@ $("confirm-clear").addEventListener("close", async () => {
 route();
 checkHealth();
 loadUsage();
+loadProviders().then(syncModelButton).catch(() => {});
 setInterval(checkHealth, 60000);

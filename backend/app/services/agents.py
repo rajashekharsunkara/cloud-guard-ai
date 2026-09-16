@@ -1,22 +1,69 @@
-import base64
 import json
 import logging
 from functools import lru_cache
 from pathlib import Path
 
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_groq import ChatGroq
-
-from backend.app.core.config import settings
-from backend.app.services import embeddings
+from backend.app.services import embeddings, llm
+from backend.app.services.llm import LlmChoice
 
 logger = logging.getLogger("cloudguard.agents")
 
 PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
-AUDITOR_MODEL = "openai/gpt-oss-120b"
-VISION_MODEL = "gemini-2.5-flash"
+REVIEW_SYSTEM = "You are a cloud security engineer. Always respond with valid JSON."
+PATCH_SYSTEM = (
+    "You are an infrastructure-as-code security engineer. Output only the file."
+)
+DIAGRAM_SYSTEM = "You are a cloud architecture reviewer."
+
+# Also sent to providers that support schema-constrained output (Anthropic);
+# others get JSON mode and the same shape described in the prompt.
+REVIEW_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "explanations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "ref": {"type": "integer"},
+                    "description": {"type": "string"},
+                    "remediation": {"type": "string"},
+                },
+                "required": ["ref", "description", "remediation"],
+                "additionalProperties": False,
+            },
+        },
+        "additional": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "severity": {
+                        "type": "string",
+                        "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW"],
+                    },
+                    "title": {"type": "string"},
+                    "description": {"type": "string"},
+                    "resource": {"type": "string"},
+                    "file": {"type": "string"},
+                    "remediation": {"type": "string"},
+                },
+                "required": [
+                    "severity",
+                    "title",
+                    "description",
+                    "resource",
+                    "file",
+                    "remediation",
+                ],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["explanations", "additional"],
+    "additionalProperties": False,
+}
 
 
 @lru_cache(maxsize=None)
@@ -33,31 +80,6 @@ def _strip_code_fence(content: str) -> str:
 
 class AuditError(RuntimeError):
     """The model's answer couldn't be used, so there is no trustworthy result."""
-
-
-def _get_groq_llm(json_mode: bool = False) -> ChatGroq:
-    extra = {"response_format": {"type": "json_object"}} if json_mode else {}
-    return ChatGroq(
-        api_key=settings.groq_api_key,
-        model=AUDITOR_MODEL,
-        temperature=0.1,
-        # Reasoning tokens count against this limit, so leave room for them
-        # on top of a full rewritten configuration.
-        max_tokens=16384,
-        reasoning_effort="medium",
-        # Groq's rate-limit responses say when to retry; waiting a little is
-        # better than dropping the explanation.
-        max_retries=3,
-        model_kwargs=extra,
-    )
-
-
-def _get_gemini_llm() -> ChatGoogleGenerativeAI:
-    return ChatGoogleGenerativeAI(
-        api_key=settings.gemini_api_key,
-        model=VISION_MODEL,
-        temperature=0.1,
-    )
 
 
 async def generate_embedding(text: str) -> list[float]:
@@ -78,25 +100,21 @@ def _format_findings(findings: list[dict]) -> str:
 
 
 def _parse_json_object(content: str) -> dict:
-    try:
-        parsed = json.loads(_strip_code_fence(content))
-    except (json.JSONDecodeError, IndexError) as e:
-        logger.error("failed to parse review response: %s", e)
-        parsed = None
-    if not isinstance(parsed, dict):
+    parsed = llm.parse_json_object(content)
+    if parsed is None:
+        logger.error("review response wasn't a JSON object")
         raise AuditError("The review came back unreadable.")
     return parsed
 
 
 def select_review_files(
-    files: dict[str, str], findings: list[dict], budget: int = None
+    files: dict[str, str], findings: list[dict], budget: int
 ) -> tuple[dict[str, str], list[str]]:
     """Pick files for the review prompt within the size budget.
 
     Files with the most serious findings go first, then the rest in path
     order. Returns (included files, paths left out).
     """
-    budget = settings.llm_review_max_chars if budget is None else budget
     worst = {}
     for f in findings:
         rank = SEVERITY_ORDER.get(f.get("severity"), 4)
@@ -144,7 +162,10 @@ def _clean_additional(items, paths) -> list[dict]:
 
 
 async def review_findings(
-    files: dict[str, str], findings: list[dict]
+    choice: LlmChoice,
+    files: dict[str, str],
+    findings: list[dict],
+    max_explained: int,
 ) -> tuple[list[dict], list[dict]]:
     """Explain Checkov findings and look for problems it can't detect.
 
@@ -153,22 +174,16 @@ async def review_findings(
     explained them, additional findings from the review).
     """
     ranked = sorted(findings, key=lambda f: SEVERITY_ORDER.get(f["severity"], 4))
-    to_explain = ranked[: settings.llm_max_explained_findings]
+    to_explain = ranked[:max_explained]
 
     prompt = _load_prompt("review_findings.txt").format(
         files=_format_files(files),
         findings=_format_findings(to_explain),
     )
-    llm = _get_groq_llm(json_mode=True)
-    response = await llm.ainvoke(
-        [
-            SystemMessage(
-                content="You are a cloud security engineer. Always respond with valid JSON."
-            ),
-            HumanMessage(content=prompt),
-        ]
+    content = await llm.complete(
+        choice, REVIEW_SYSTEM, prompt, json_schema=REVIEW_SCHEMA
     )
-    parsed = _parse_json_object(response.content)
+    parsed = _parse_json_object(content)
 
     explained = [dict(f) for f in ranked]
     for item in parsed.get("explanations") or []:
@@ -190,18 +205,16 @@ async def review_findings(
 
 
 async def run_patch_generation(
+    choice: LlmChoice,
     iac_content: str,
     vulnerabilities: list[dict],
     similar_patches: list[dict],
     file_name: str = "main.tf",
 ) -> str:
-    logger.info("generating patched code with %d RAG patches", len(similar_patches))
-    llm = _get_groq_llm()
-
-    patches_context = "No historical data available."
+    patches_context = "No earlier fixes."
     if similar_patches:
         patches_context = "\n\n".join(
-            f"--- Past Fix (similarity: {p.get('similarity_score', 'N/A')}) ---\n"
+            f"--- Earlier fix (similarity: {p.get('similarity_score', 'N/A')}) ---\n"
             f"Issue: {p.get('description', 'N/A')}\n"
             f"Patch:\n{p.get('patched_code', 'N/A')}"
             for p in similar_patches
@@ -213,39 +226,20 @@ async def run_patch_generation(
         vulnerabilities=json.dumps(vulnerabilities, indent=2),
         similar_patches=patches_context,
     )
-
-    response = await llm.ainvoke(
-        [
-            SystemMessage(
-                content="You are an IaC security engineer. Output only valid code."
-            ),
-            HumanMessage(content=prompt),
-        ]
-    )
-    return _strip_code_fence(response.content)
+    content = await llm.complete(choice, PATCH_SYSTEM, prompt)
+    return _strip_code_fence(content)
 
 
 async def run_diagram_analysis(
-    iac_content: str, image_bytes: bytes, mime_type: str = "image/png"
+    choice: LlmChoice,
+    iac_content: str,
+    image_bytes: bytes,
+    mime_type: str = "image/png",
 ) -> str:
-    llm = _get_gemini_llm()
-    prompt_text = _load_prompt("vision_audit.txt").format(iac_content=iac_content)
-    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-
-    response = await llm.ainvoke(
-        [
-            HumanMessage(
-                content=[
-                    {"type": "text", "text": prompt_text},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{mime_type};base64,{image_b64}"},
-                    },
-                ]
-            )
-        ]
+    prompt = _load_prompt("vision_audit.txt").format(iac_content=iac_content)
+    return await llm.complete_with_image(
+        choice, DIAGRAM_SYSTEM, prompt, image_bytes, mime_type
     )
-    return response.content
 
 
 def _finding_text(finding: dict) -> str:

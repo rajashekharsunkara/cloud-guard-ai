@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import AsyncIterator, Optional
 
 from backend.app.core.config import settings
-from backend.app.services import agents
+from backend.app.services import agents, llm
 from backend.app.services.checkov import ScannerError, run_checkov, safe_relative_path
 from backend.app.services.severity import score_findings
 from backend.app.services.storage import StorageService
@@ -59,15 +59,6 @@ def _plural(n: int, word: str, many: str = None) -> str:
     return f"{n} {word if n == 1 else (many or word + 's')}"
 
 
-def is_rate_limited(error: Exception) -> bool:
-    """True when a provider refused the call for quota rather than failing."""
-    status = getattr(error, "status_code", None)
-    text = str(error).lower()
-    return status in (413, 429) and (
-        "rate_limit" in text or "rate limit" in text or status == 429
-    )
-
-
 BUSY_NOTICE = (
     "The explanation model is at its per-minute limit right now, because the free "
     "tier is shared by everyone using this site. The Checkov results are complete; "
@@ -75,7 +66,53 @@ BUSY_NOTICE = (
 )
 
 
-def files_to_patch(files: dict[str, str], findings: list[dict]) -> list[str]:
+@dataclass(frozen=True)
+class Budget:
+    review_chars: int
+    explained: int
+    patched_files: int
+    patch_file_chars: int
+    patch_concurrency: int
+
+    @classmethod
+    def free(cls) -> "Budget":
+        return cls(
+            settings.llm_review_max_chars,
+            settings.llm_max_explained_findings,
+            settings.llm_max_patched_files,
+            settings.llm_patch_max_file_chars,
+            settings.llm_patch_concurrency,
+        )
+
+    @classmethod
+    def own_key(cls) -> "Budget":
+        # A visitor's own key has its own rate limits, so the scan can send
+        # much more. These still keep one scan to a few minutes.
+        return cls(120_000, 60, 5, 60_000, 3)
+
+
+def model_failure_notice(error: Exception, choice: llm.LlmChoice) -> str:
+    complete = "The Checkov results are still complete."
+    if not isinstance(error, llm.LlmError):
+        return f"Explanations couldn't be generated for this scan. {complete}"
+    if not choice.own_key:
+        if error.kind == "rate_limit":
+            return BUSY_NOTICE
+        return f"Explanations couldn't be generated for this scan. {complete}"
+    messages = {
+        "auth": f"Your {choice.label} key was rejected. Check it in Model settings.",
+        "not_found": f"Your {choice.label} key can't use {choice.model}. "
+        "Pick another model in Model settings.",
+        "rate_limit": f"Your {choice.label} account hit a rate limit or ran out of quota.",
+        "refused": f"{choice.label} declined to review this file.",
+        "too_large": f"The files were too large for {choice.model}.",
+    }
+    return f"{messages.get(error.kind, error.message)} {complete}"
+
+
+def files_to_patch(
+    files: dict[str, str], findings: list[dict], budget: Budget
+) -> list[str]:
     """Files with findings, most serious first, within the patch budget.
 
     Each patch is a full rewrite of one file, so only files small enough to
@@ -85,24 +122,34 @@ def files_to_patch(files: dict[str, str], findings: list[dict]) -> list[str]:
     worst = {}
     for f in findings:
         path = f.get("file")
-        if path in files and len(files[path]) <= settings.llm_patch_max_file_chars:
+        if path in files and len(files[path]) <= budget.patch_file_chars:
             rank = SEVERITY_ORDER.get(f.get("severity"), 4)
             worst[path] = min(rank, worst.get(path, 4))
     ranked = sorted(worst, key=lambda p: (worst[p], p))
-    return ranked[: settings.llm_max_patched_files]
+    return ranked[: budget.patched_files]
 
 
 class Scan:
     """One scan: Checkov first, then explanations and patches when allowed."""
 
-    def __init__(self, scan_input: ScanInput, db_service, quota, workspace_id: str):
+    def __init__(
+        self,
+        scan_input: ScanInput,
+        db_service,
+        quota,
+        workspace_id: str,
+        own_choice: Optional[llm.LlmChoice] = None,
+    ):
         self.input = scan_input
         self.db = db_service
         self.quota = quota
         self.workspace_id = workspace_id
+        self.own_choice = own_choice
         self.audit_id = uuid.uuid4().hex[:12]
 
         self.mode = "static"
+        self.choice: Optional[llm.LlmChoice] = None
+        self.budget = Budget.free()
         self.notices: list[str] = []
         self.findings: list[dict] = []
         self.additional: list[dict] = []
@@ -163,41 +210,59 @@ class Scan:
         yield event("static_checks", "complete", message)
 
     async def _claim_model(self) -> bool:
-        if not self.quota.enabled:
+        if self.own_choice is not None:
+            self.mode, self.choice, self.budget = (
+                "own_key",
+                self.own_choice,
+                Budget.own_key(),
+            )
+            return True
+        free_choice = llm.free_tier_choice()
+        if free_choice is None or not self.quota.enabled:
             self.notices.append(
-                "Explanations and patches aren't available on this server, "
-                "so only the Checkov results are shown."
+                "This server doesn't offer free explanations, so only the Checkov "
+                "results are shown. Add your own API key in Model settings for "
+                "explanations and patches."
             )
             return False
         if not await self.quota.claim():
             self.notices.append(
                 f"You've used today's {settings.free_llm_scans_per_day} free explained "
-                "scans. The Checkov results are still complete; explanations and "
-                "patches are available again tomorrow."
+                "scans. The Checkov results are still complete. Explanations and "
+                "patches come back tomorrow, or add your own API key in Model settings."
             )
             return False
-        self.mode = "free"
+        self.mode, self.choice = "free", free_choice
         return True
 
     async def _model_steps(self) -> AsyncIterator[dict]:
+        async for item in self._review():
+            yield item
+        if self.mode == "static":
+            return
+        if self.findings or self.additional:
+            async for item in self._patch():
+                yield item
+        if self.input.image_bytes:
+            async for item in self._diagram():
+                yield item
+
+    async def _review(self) -> AsyncIterator[dict]:
+        """Explain findings; on failure, fall back to static mode with a notice."""
         yield event("review", "running", "Explaining findings...")
         review_files, left_out = agents.select_review_files(
-            self.input.files, self.findings
+            self.input.files, self.findings, self.budget.review_chars
         )
         try:
             self.findings, self.additional = await agents.review_findings(
-                review_files, self.findings
+                self.choice, review_files, self.findings, self.budget.explained
             )
         except Exception as error:
-            logger.warning("review failed for audit %s", self.audit_id, exc_info=True)
-            await self.quota.refund()
+            self._log_model_failure("review", error)
+            if self.mode == "free":
+                await self.quota.refund()
+            self.notices.append(model_failure_notice(error, self.choice))
             self.mode = "static"
-            self.notices.append(
-                BUSY_NOTICE
-                if is_rate_limited(error)
-                else "Explanations couldn't be generated for this scan. "
-                "The Checkov results are still complete."
-            )
             yield event("review", "error", "Explanations unavailable")
             return
         if self.input.single_path:
@@ -211,12 +276,19 @@ class Scan:
             )
         yield event("review", "complete", self._review_message())
 
-        if self.findings or self.additional:
-            async for item in self._patch():
-                yield item
-        if self.input.image_bytes:
-            async for item in self._diagram():
-                yield item
+    def _log_model_failure(self, step: str, error: Exception) -> None:
+        if isinstance(error, llm.LlmError):
+            # Provider errors can quote part of the key, so only the
+            # classification is logged.
+            logger.warning(
+                "%s failed for audit %s: %s (%s)",
+                step,
+                self.audit_id,
+                error.kind,
+                error.status,
+            )
+        else:
+            logger.warning("%s failed for audit %s", step, self.audit_id, exc_info=True)
 
     def _review_message(self) -> str:
         if self.additional:
@@ -235,7 +307,7 @@ class Scan:
             f"{_plural(len(self.similar), 'related fix', 'related fixes')} from earlier scans",
         )
 
-        targets = files_to_patch(self.input.files, all_findings)
+        targets = files_to_patch(self.input.files, all_findings, self.budget)
         if not targets:
             return
         yield event(
@@ -262,7 +334,7 @@ class Scan:
             self.notices.append(
                 f"{_plural(skipped, 'file')} with findings "
                 f"{'was' if skipped == 1 else 'were'}n't patched. Patches "
-                f"cover up to {settings.llm_max_patched_files} files per scan, and "
+                f"cover up to {self.budget.patched_files} files per scan, and "
                 "files too large to rewrite in one go are skipped."
             )
         if not self.patches:
@@ -278,22 +350,21 @@ class Scan:
     async def _write_patches(
         self, targets: list[str], findings: list[dict]
     ) -> list[dict]:
-        limit = asyncio.Semaphore(settings.llm_patch_concurrency)
+        limit = asyncio.Semaphore(self.budget.patch_concurrency)
 
         async def patch_one(path: str) -> Optional[dict]:
             context = [_patch_context(f) for f in findings if f.get("file") == path]
             async with limit:
                 try:
                     patched = await agents.run_patch_generation(
-                        self.input.files[path], context, self.similar, file_name=path
+                        self.choice,
+                        self.input.files[path],
+                        context,
+                        self.similar,
+                        file_name=path,
                     )
-                except Exception:
-                    logger.warning(
-                        "patch failed for %s in audit %s",
-                        path,
-                        self.audit_id,
-                        exc_info=True,
-                    )
+                except Exception as error:
+                    self._log_model_failure(f"patch of {path}", error)
                     return None
             if not patched.strip():
                 return None
@@ -310,11 +381,15 @@ class Scan:
         yield event("diagram", "running", "Comparing the diagram...")
         try:
             self.diagram_analysis = await agents.run_diagram_analysis(
-                self._diagram_context(), self.input.image_bytes, self.input.image_type
+                self.choice,
+                self._diagram_context(),
+                self.input.image_bytes,
+                self.input.image_type,
             )
-        except Exception:
-            logger.warning("diagram failed for audit %s", self.audit_id, exc_info=True)
-            self.notices.append("The diagram couldn't be compared this time.")
+        except Exception as error:
+            self._log_model_failure("diagram", error)
+            reason = error.message if isinstance(error, llm.LlmError) else ""
+            self.notices.append(f"The diagram couldn't be compared. {reason}".strip())
             yield event("diagram", "error", "Comparison unavailable")
             return
         yield event("diagram", "complete", "Compared")
@@ -367,6 +442,11 @@ class Scan:
             "diagram_analysis": self.diagram_analysis,
             "analysis": {
                 "mode": self.mode,
+                "model": (
+                    {"provider": self.choice.label, "model": self.choice.model}
+                    if self.choice and self.mode != "static"
+                    else None
+                ),
                 "source": self.input.source,
                 "checkov_version": self.checkov_version,
                 "covered_files": self.covered_files,

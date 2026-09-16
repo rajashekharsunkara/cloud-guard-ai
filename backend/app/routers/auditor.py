@@ -2,11 +2,14 @@ import asyncio
 import json
 import logging
 
+from typing import Optional
+
 from fastapi import (
     APIRouter,
     Depends,
     File,
     Form,
+    Header,
     HTTPException,
     Request,
     Response,
@@ -31,12 +34,16 @@ from backend.app.schemas.auditor import (
     AuditResult,
     AuditSummary,
     HealthResponse,
+    ModelListRequest,
+    ModelListResponse,
+    ProviderInfo,
     RepoRequest,
     SearchRequest,
     SearchResponse,
     SearchResultItem,
     UsageResponse,
 )
+from backend.app.services import llm
 from backend.app.services.agents import generate_embedding
 from backend.app.services.db_service import DBService
 from backend.app.services.pipeline import (
@@ -65,6 +72,50 @@ ALLOWED_DIAGRAM_TYPES = {"image/png", "image/jpeg", "image/webp"}
 
 def get_quota(request: Request, db: AsyncSession = Depends(get_db)) -> FreeQuota:
     return FreeQuota(db, client_ip(request))
+
+
+def get_own_choice(
+    x_llm_provider: Optional[str] = Header(default=None),
+    x_llm_model: Optional[str] = Header(default=None),
+    x_llm_key: Optional[str] = Header(default=None),
+) -> Optional[llm.LlmChoice]:
+    """The visitor's own provider, model and key, when they sent one.
+
+    Sent as headers on each request and used only for that request.
+    """
+    if not (x_llm_provider or x_llm_model or x_llm_key):
+        return None
+    try:
+        return llm.validate_choice(
+            x_llm_provider or "", x_llm_model or "", x_llm_key or ""
+        )
+    except llm.LlmError as e:
+        raise HTTPException(status_code=400, detail=e.message)
+
+
+@router.get("/llm/providers", response_model=list[ProviderInfo])
+async def providers():
+    """Providers a visitor can use with their own API key."""
+    return [
+        ProviderInfo(id=p.id, label=p.label, key_url=p.key_url)
+        for p in llm.PROVIDERS.values()
+    ]
+
+
+@router.post(
+    "/llm/models",
+    response_model=ModelListResponse,
+    dependencies=[Depends(search_rate_limit)],
+)
+async def list_models(
+    request: ModelListRequest, x_llm_key: str = Header(..., max_length=400)
+):
+    """Check a key and list the chat models it can use. The key isn't stored."""
+    try:
+        return await llm.list_models(request.provider, x_llm_key)
+    except llm.LlmError as e:
+        status = 400 if e.kind in ("auth", "bad_request") else 502
+        raise HTTPException(status_code=status, detail=e.message)
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -124,6 +175,7 @@ async def audit_iac(
     db: AsyncSession = Depends(get_db),
     quota: FreeQuota = Depends(get_quota),
     workspace_id: str = Depends(get_workspace_id),
+    own_choice: Optional[llm.LlmChoice] = Depends(get_own_choice),
 ):
     """Run Checkov on a configuration, then explain and patch it when allowed."""
     scan = Scan(
@@ -131,6 +183,7 @@ async def audit_iac(
         DBService(db),
         quota,
         workspace_id,
+        own_choice,
     )
     return await _run_scan(scan)
 
@@ -147,6 +200,7 @@ async def audit_with_diagram(
     db: AsyncSession = Depends(get_db),
     quota: FreeQuota = Depends(get_quota),
     workspace_id: str = Depends(get_workspace_id),
+    own_choice: Optional[llm.LlmChoice] = Depends(get_own_choice),
 ):
     """Scan the configuration and compare it with an architecture diagram."""
     if diagram.content_type not in ALLOWED_DIAGRAM_TYPES:
@@ -157,10 +211,11 @@ async def audit_with_diagram(
         )
     if len(iac_content) > settings.max_iac_chars:
         raise HTTPException(status_code=413, detail="Configuration too large")
-    if await quota.remaining() == 0:
+    if own_choice is None:
         raise HTTPException(
-            status_code=429,
-            detail="No free diagram checks are left today. Try again tomorrow.",
+            status_code=400,
+            detail="Diagram checks use your own API key with a model that can read "
+            "images. Add one in Model settings.",
         )
 
     image_bytes = await diagram.read()
@@ -180,6 +235,7 @@ async def audit_with_diagram(
         DBService(db),
         quota,
         workspace_id,
+        own_choice,
     )
     return await _run_scan(scan)
 
@@ -235,6 +291,7 @@ async def audit_stream(
     db: AsyncSession = Depends(get_db),
     quota: FreeQuota = Depends(get_quota),
     workspace_id: str = Depends(get_workspace_id),
+    own_choice: Optional[llm.LlmChoice] = Depends(get_own_choice),
 ):
     """Same as /audit, streamed as Server-Sent Events while each step runs."""
     scan = Scan(
@@ -242,6 +299,7 @@ async def audit_stream(
         DBService(db),
         quota,
         workspace_id,
+        own_choice,
     )
     return _stream_response(_stream_scan(scan))
 
@@ -252,6 +310,7 @@ async def audit_archive(
     db: AsyncSession = Depends(get_db),
     quota: FreeQuota = Depends(get_quota),
     workspace_id: str = Depends(get_workspace_id),
+    own_choice: Optional[llm.LlmChoice] = Depends(get_own_choice),
 ):
     """Scan every configuration file in a zip. Streamed as Server-Sent Events."""
     data = await archive.read(MAX_ARCHIVE_BYTES + 1)
@@ -266,6 +325,7 @@ async def audit_archive(
         DBService(db),
         quota,
         workspace_id,
+        own_choice,
     )
     return _stream_response(_stream_scan(scan))
 
@@ -276,6 +336,7 @@ async def audit_repo(
     db: AsyncSession = Depends(get_db),
     quota: FreeQuota = Depends(get_quota),
     workspace_id: str = Depends(get_workspace_id),
+    own_choice: Optional[llm.LlmChoice] = Depends(get_own_choice),
 ):
     """Scan a public GitHub repository or folder. Streamed as Server-Sent Events."""
     try:
@@ -292,6 +353,7 @@ async def audit_repo(
         DBService(db),
         quota,
         workspace_id,
+        own_choice,
     )
     return _stream_response(_stream_scan(scan, fetch=fetch))
 
