@@ -77,6 +77,12 @@ class ScanAnalysis(BaseModel):
     model: Optional[dict] = Field(
         default=None, description="Provider and model that explained the scan"
     )
+    limit: Optional[dict] = Field(
+        default=None,
+        description="Why explanations are missing when a free-tier limit applied: "
+        "kind (busy, patch_busy, site_daily, visitor_daily, too_large, unavailable), "
+        "retry_after seconds, resets_at and message",
+    )
 
 
 class AuditResult(BaseModel):
@@ -98,6 +104,9 @@ class AuditResult(BaseModel):
     )
     files: list[str] = Field(default=[], description="Paths that were scanned")
     patches: list[PatchItem] = []
+    sources: dict[str, str] = Field(
+        default={}, description="Contents of the files that have findings"
+    )
     analysis: Optional[ScanAnalysis] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

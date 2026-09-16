@@ -35,6 +35,8 @@ class Audit(Base):
     # Paths scanned, and [{file, original, patched}] for each patched file.
     files = Column(JSONB, nullable=True)
     patches = Column(JSONB, nullable=True)
+    # {path: content} for files with findings, for the annotated report.
+    sources = Column(JSONB, nullable=True)
     diagram_analysis = Column(Text, nullable=True)
     created_at = Column(DateTime, default=_utcnow, index=True)
 
@@ -75,6 +77,13 @@ def _legacy_patch(audit: Audit) -> list[dict]:
     ]
 
 
+def _legacy_sources(audit: Audit) -> dict:
+    if not audit.original_code:
+        return {}
+    path = (audit.files or [audit.file_name])[0]
+    return {path: audit.original_code}
+
+
 class DBService:
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -92,6 +101,7 @@ class DBService:
         analysis: Optional[dict] = None,
         files: Optional[list[str]] = None,
         patches: Optional[list[dict]] = None,
+        sources: Optional[dict] = None,
     ) -> Audit:
         audit = Audit(
             id=audit_id,
@@ -105,6 +115,7 @@ class DBService:
             analysis=analysis,
             files=files,
             patches=patches,
+            sources=sources,
         )
         self.session.add(audit)
         await self.session.commit()
@@ -227,6 +238,7 @@ class DBService:
             "analysis": audit.analysis,
             "files": audit.files or [],
             "patches": audit.patches or _legacy_patch(audit),
+            "sources": audit.sources or _legacy_sources(audit),
             "created_at": audit.created_at,
         }
 

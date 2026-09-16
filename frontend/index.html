@@ -3,16 +3,19 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="CloudGuard reviews Terraform and Docker Compose files for security problems and suggests a corrected version.">
+  <meta name="description" content="CloudGuard reviews Terraform, CloudFormation, Kubernetes, Compose and Dockerfiles for security problems, shows each one on the line it comes from, and writes the fix.">
+  <meta name="theme-color" content="#f3f0e8">
   <title>CloudGuard</title>
+  <link rel="preload" href="/static/fonts/ibm-plex-sans.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/static/fonts/ibm-plex-mono-500.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/static/fonts/fonts.css">
   <link rel="stylesheet" href="/static/css/styles.css">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%231c1c1a'/><path d='M16 6.5l8 3v6c0 5-3.4 8.4-8 10-4.6-1.6-8-5-8-10v-6l8-3z' fill='none' stroke='%23fafaf9' stroke-width='2.2' stroke-linejoin='round'/></svg>">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%231c1a15'/><path d='M11 8H8v16h3M21 8h3v16h-3' fill='none' stroke='%23f3f0e8' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/><path d='M12.5 16h7' stroke='%23e8660f' stroke-width='3' stroke-linecap='round'/></svg>">
   <script>
     (function () {
       var saved = null;
       try { saved = localStorage.getItem("cg-theme"); } catch (e) {}
-      var dark = saved ? saved === "dark"
-        : window.matchMedia("(prefers-color-scheme: dark)").matches;
+      var dark = saved ? saved === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
       document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
     })();
   </script>
@@ -20,43 +23,42 @@
 <body>
   <svg width="0" height="0" style="position:absolute" aria-hidden="true">
     <defs>
-      <symbol id="i-mark" viewBox="0 0 24 24"><path d="M12 3l7 2.6v5.2c0 4.4-3 7.4-7 9.2-4-1.8-7-4.8-7-9.2V5.6L12 3z"/><path d="M9 11.8l2.2 2.2L15.2 10"/></symbol>
+      <symbol id="i-mark" viewBox="0 0 26 26"><path d="M8.5 5H5v16h3.5M17.5 5H21v16h-3.5"/><path class="rail" d="M10 13h6"/></symbol>
       <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4L6 18M18 6l1.4-1.4"/></symbol>
       <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.2A8 8 0 019.8 4 8 8 0 1020 14.2z"/></symbol>
       <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
       <symbol id="i-x" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
       <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+      <symbol id="i-up" viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></symbol>
+      <symbol id="i-down" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
       <symbol id="i-back" viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></symbol>
       <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 00-2-2H6a2 2 0 00-2 2v8a2 2 0 002 2h2"/></symbol>
       <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19.5h14"/></symbol>
       <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15.5V4.5M7.5 9L12 4.5 16.5 9M5 19.5h14"/></symbol>
-      <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L20 3M16 7l3 3M14 9l2 2"/></symbol>
       <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></symbol>
+      <symbol id="i-paste" viewBox="0 0 24 24"><path d="M9 4h6v3H9z"/><path d="M15 5.5h2.5A1.5 1.5 0 0119 7v12.5a1.5 1.5 0 01-1.5 1.5h-11A1.5 1.5 0 015 19.5V7a1.5 1.5 0 011.5-1.5H9"/><path d="M9 12h6M9 16h4"/></symbol>
+      <symbol id="i-zip" viewBox="0 0 24 24"><path d="M7 3h7l5 5v12.5a.5.5 0 01-.5.5h-11a.5.5 0 01-.5-.5V3.5A.5.5 0 017 3z"/><path d="M11 3v2h2v2h-2v2h2v2h-2v3"/></symbol>
+      <symbol id="i-repo" viewBox="0 0 24 24"><circle cx="6.5" cy="5.5" r="2"/><circle cx="6.5" cy="18.5" r="2"/><circle cx="17.5" cy="8.5" r="2"/><path d="M6.5 7.5v9M17.5 10.5c0 4-5 3-9.5 6.5"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 10.6 4"/><path d="M20 5v6h-6"/></symbol>
     </defs>
   </svg>
 
-  <header class="site-header">
-    <div class="container header-inner">
-      <a class="wordmark" href="#scan">
-        <svg class="icon mark"><use href="#i-mark"/></svg>
-        <span>CloudGuard</span>
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <a class="brand" href="#scan" aria-label="CloudGuard home">
+        <svg class="icon brand-mark"><use href="#i-mark"/></svg>
+        <span class="brand-name">CloudGuard</span>
       </a>
-
-      <nav class="site-nav" aria-label="Main">
+      <nav class="nav" aria-label="Main">
         <a href="#scan" data-route="scan">Scan</a>
         <a href="#diagram" data-route="diagram">Diagram check</a>
         <a href="#history" data-route="history">History</a>
         <a href="#how" data-route="how">How it works</a>
       </nav>
-
-      <div class="header-tools">
-        <button class="model-btn" id="btn-model" type="button" title="Model settings">
-          <svg class="icon"><use href="#i-key"/></svg>
-          <span id="model-label">Free tier</span>
+      <div class="topbar-tools">
+        <button class="plan-pill" id="plan-pill" type="button" data-state="free" title="Model settings">
+          <span class="plan-dot"></span><span id="plan-text">Free tier</span>
         </button>
-        <span class="status" id="status" data-state="unknown" title="Checking service status">
-          <span class="status-dot"></span><span class="status-text">Checking</span>
-        </span>
         <button class="icon-btn" id="theme-toggle" type="button" aria-label="Switch to dark theme">
           <svg class="icon show-light"><use href="#i-moon"/></svg>
           <svg class="icon show-dark"><use href="#i-sun"/></svg>
@@ -65,29 +67,30 @@
     </div>
   </header>
 
-  <main class="container">
+  <main class="wrap">
 
     <section class="view" id="view-scan" data-title="Scan">
-      <div class="view-head">
-        <h1>Scan infrastructure code</h1>
-        <p>Paste a file, upload a zip or link a public GitHub repository. Checkov finds the security problems, and an explained scan says what each one means for your code and writes a fix you can compare line by line. <a href="#how">How it works</a></p>
+      <div class="page-head">
+        <span class="eyebrow">Infrastructure code review</span>
+        <h1>Scan infrastructure code for security problems</h1>
+        <p class="lede">Paste a Terraform, CloudFormation, Kubernetes or Compose file, upload a zip, or link a public GitHub repository. Checkov runs over a thousand policies against it, and an explained scan pins each problem to the line it comes from and writes the fix.</p>
       </div>
 
-      <div class="workspace">
-        <div class="scan-card">
+      <div class="desk">
+        <div class="intake">
           <div class="source-tabs" role="tablist" aria-label="What to scan">
-            <button class="source-tab" role="tab" type="button" data-source="paste" aria-selected="true">Paste a file</button>
-            <button class="source-tab" role="tab" type="button" data-source="zip" aria-selected="false">Upload a zip</button>
-            <button class="source-tab" role="tab" type="button" data-source="github" aria-selected="false">GitHub repository</button>
+            <button class="source-tab" role="tab" type="button" data-source="paste" aria-selected="true"><svg class="icon"><use href="#i-paste"/></svg>Paste a file</button>
+            <button class="source-tab" role="tab" type="button" data-source="zip" aria-selected="false"><svg class="icon"><use href="#i-zip"/></svg>Upload a zip</button>
+            <button class="source-tab" role="tab" type="button" data-source="github" aria-selected="false"><svg class="icon"><use href="#i-repo"/></svg>GitHub repository</button>
           </div>
 
-          <div class="editor" data-panel-source="paste">
+          <div data-panel-source="paste">
             <div class="editor-bar">
               <label class="sr-only" for="file-name">File name</label>
               <input class="filename" id="file-name" type="text" value="main.tf" maxlength="255" spellcheck="false" autocomplete="off">
               <span class="editor-meta" id="editor-meta"></span>
               <span class="spacer"></span>
-              <button class="link-btn" id="btn-example" type="button">Use example</button>
+              <button class="link-btn" id="btn-example" type="button">Load an example</button>
               <button class="link-btn" id="btn-clear" type="button">Clear</button>
             </div>
             <div class="editor-body">
@@ -104,88 +107,92 @@
               <span class="dropzone-empty">
                 <svg class="icon"><use href="#i-upload"/></svg>
                 <span class="dropzone-title" id="zip-title">Choose a zip or drop it here</span>
-                <span class="dropzone-sub" id="zip-sub">Terraform, CloudFormation, Kubernetes, Compose and Dockerfiles inside are scanned. Up to 10 MB.</span>
+                <span class="dropzone-sub" id="zip-sub">Terraform, CloudFormation, Kubernetes, Compose and Dockerfiles inside it are scanned; everything else is ignored. Up to 10 MB.</span>
               </span>
             </label>
           </div>
 
           <div class="source-panel repo-panel" data-panel-source="github" hidden>
-            <label class="field-label" for="repo-url">Repository or folder link</label>
-            <input class="text-field" id="repo-url" type="url" spellcheck="false" autocomplete="off"
-              placeholder="https://github.com/owner/repo/tree/main/infra">
-            <p class="field-help">Public repositories only. Link to a folder to scan part of a repository. Branch names containing a slash aren't supported in folder links.</p>
-            <p class="field-help">Try it with <button class="link-btn inline" type="button" data-repo="https://github.com/bridgecrewio/terragoat/tree/master/terraform/aws">terragoat</button>, a deliberately vulnerable Terraform project.</p>
+            <label class="field-label" for="repo-url">Public repository or folder</label>
+            <input class="text-field" id="repo-url" type="url" spellcheck="false" autocomplete="off" placeholder="https://github.com/owner/repo/tree/main/infra">
+            <p class="field-help">Link to a folder to scan part of a repository. Private repositories and branch names containing a slash aren't supported.</p>
+            <p class="field-help">Try <button class="link-btn inline" type="button" data-repo="https://github.com/bridgecrewio/terragoat/tree/master/terraform/aws">terragoat</button>, a Terraform project that's vulnerable on purpose.</p>
           </div>
 
           <div class="scan-bar">
-            <span class="hint" id="usage-hint"></span>
-            <button class="btn btn-primary" id="btn-scan" type="button" title="Scan (Ctrl+Enter)">Scan</button>
+            <span class="scan-hint" id="scan-hint"><kbd>Ctrl</kbd> <kbd>Enter</kbd> to scan</span>
+            <button class="btn btn-primary" id="btn-scan" type="button">Scan</button>
           </div>
         </div>
 
-        <aside class="side">
-          <div id="side-idle">
-            <h2 class="side-title">How a scan works</h2>
-            <ul class="checks">
-              <li><strong>Checkov</strong> runs over 1,000 policies for Terraform, CloudFormation, Kubernetes and Dockerfiles. Its findings decide the score.</li>
-              <li>An explained scan then says what each finding means for this file and how to fix it.</li>
-              <li>It also looks for problems no policy covers, such as secrets in Docker Compose, and writes a patched file.</li>
-            </ul>
-            <p class="side-note">Checkov takes a few seconds. An explained scan takes 30 to 60 seconds. <a href="#how">More detail</a></p>
+        <aside class="desk-side">
+          <div class="side-block" id="side-idle">
+            <span class="eyebrow">What a scan does</span>
+            <ol class="steps-list">
+              <li><strong>Checkov</strong> checks every resource against its policies. The score comes only from these results, so it's the same every time.</li>
+              <li>An <strong>explained scan</strong> says what each finding puts at risk in your code, and flags problems no policy covers.</li>
+              <li>It writes a <strong>patched file</strong> you can compare line by line before using it.</li>
+            </ol>
           </div>
 
-          <div id="side-progress" hidden>
-            <h2 class="side-title">Progress</h2>
-            <ol class="steps" id="steps"></ol>
+          <div class="tier-box" id="tier-box" hidden></div>
+
+          <div class="side-block" id="side-progress" hidden>
+            <span class="eyebrow">Scan log</span>
+            <ol class="log" id="log" aria-live="polite"></ol>
           </div>
         </aside>
       </div>
 
-      <div class="report" id="scan-report" hidden></div>
+      <section class="report" id="scan-report" hidden></section>
     </section>
 
     <section class="view" id="view-diagram" data-title="Diagram check" hidden>
-      <div class="view-head">
-        <h1>Diagram check</h1>
-        <p>Upload an architecture diagram with the Terraform that's meant to build it. CloudGuard reports resources and connections that don't match, then runs the usual security scan on the code. Diagram checks use your own API key with a model that can read images. <button class="link-btn inline" type="button" data-open-model>Model settings</button></p>
+      <div class="page-head">
+        <span class="eyebrow">Architecture drift</span>
+        <h1>Compare an architecture diagram with its code</h1>
+        <p class="lede">Upload an architecture diagram with the Terraform that's meant to build it. CloudGuard lists resources and connections that don't line up, then scans the Terraform as usual. Diagram checks use your own API key with a model that reads images. <button class="link-btn inline" type="button" data-open-model>Model settings</button></p>
       </div>
 
       <div class="diagram-grid">
-        <div class="editor">
-          <div class="editor-bar">
-            <span class="editor-label">Terraform</span>
-          </div>
+        <div class="panel">
+          <div class="panel-label"><span class="eyebrow">Terraform</span></div>
           <div class="editor-body short">
             <label class="sr-only" for="diagram-iac">Terraform configuration</label>
             <textarea id="diagram-iac" wrap="off" spellcheck="false" placeholder="Paste the Terraform for the environment in the diagram"></textarea>
           </div>
         </div>
-
-        <label class="dropzone" id="dropzone" for="diagram-file">
-          <input type="file" id="diagram-file" accept="image/png,image/jpeg,image/webp">
-          <span class="dropzone-empty" id="dropzone-empty">
-            <svg class="icon"><use href="#i-upload"/></svg>
-            <span class="dropzone-title">Choose a diagram or drop it here</span>
-            <span class="dropzone-sub">PNG, JPEG or WebP, up to 8 MB</span>
-          </span>
-          <img class="dropzone-preview" id="dropzone-preview" alt="Selected diagram" hidden>
-        </label>
+        <div class="panel">
+          <div class="panel-label"><span class="eyebrow">Diagram</span></div>
+          <div class="panel-body">
+            <label class="dropzone" id="dropzone" for="diagram-file">
+              <input type="file" id="diagram-file" accept="image/png,image/jpeg,image/webp">
+              <span class="dropzone-empty" id="dropzone-empty">
+                <svg class="icon"><use href="#i-upload"/></svg>
+                <span class="dropzone-title">Choose an image or drop it here</span>
+                <span class="dropzone-sub">PNG, JPEG or WebP, up to 8 MB</span>
+              </span>
+              <img class="dropzone-preview" id="dropzone-preview" alt="Selected diagram" hidden>
+            </label>
+          </div>
+        </div>
       </div>
 
       <div class="actions">
-        <span class="hint" id="diagram-file-name"></span>
+        <span class="scan-hint" id="diagram-file-name"></span>
         <button class="btn btn-primary" id="btn-compare" type="button">Compare</button>
       </div>
 
-      <div class="report" id="diagram-report" hidden></div>
+      <section class="report" id="diagram-report" hidden></section>
     </section>
 
     <section class="view" id="view-history" data-title="History" hidden>
       <div id="history-index">
-        <div class="view-head with-action">
+        <div class="page-head with-action">
           <div>
+            <span class="eyebrow">Your scans</span>
             <h1>History</h1>
-            <p>Scans made in this browser. They're linked to a cookie rather than an account, so other visitors can't see them and they won't appear on your other devices.</p>
+            <p class="lede">Scans made in this browser. They're tied to a cookie, not an account, so nobody else can see them and they won't show up on your other devices.</p>
           </div>
           <button class="btn btn-quiet" id="btn-clear-history" type="button">Clear history</button>
         </div>
@@ -193,8 +200,8 @@
         <form class="search" id="search-form" role="search">
           <svg class="icon"><use href="#i-search"/></svg>
           <label class="sr-only" for="search-input">Search findings</label>
-          <input type="search" id="search-input" minlength="3" maxlength="1000" placeholder="Search your findings">
-          <button class="btn btn-quiet" type="submit">Search</button>
+          <input type="search" id="search-input" minlength="3" maxlength="1000" placeholder="Search your findings, e.g. database open to the internet">
+          <button class="btn btn-quiet btn-sm" type="submit">Search</button>
         </form>
 
         <div id="history-body"></div>
@@ -202,88 +209,105 @@
 
       <div id="history-detail" hidden>
         <a class="back" href="#history"><svg class="icon"><use href="#i-back"/></svg>All scans</a>
-        <div class="report" id="history-report"></div>
+        <section class="report" id="history-report"></section>
       </div>
     </section>
 
     <section class="view" id="view-how" data-title="How it works" hidden>
-      <article class="prose">
-        <h1>How CloudGuard works</h1>
-        <p class="lead">CloudGuard checks infrastructure code for security mistakes before it gets deployed. A proven static analyzer finds the problems, and a language model explains them in terms of your file and writes a corrected version.</p>
+      <div class="guide">
+        <nav class="guide-toc" aria-label="On this page">
+          <span class="eyebrow">On this page</span>
+          <a href="#how" data-jump="how-scan">What happens</a>
+          <a href="#how" data-jump="how-free">Free scans and keys</a>
+          <a href="#how" data-jump="how-score">The score</a>
+          <a href="#how" data-jump="how-diagram">Diagram check</a>
+          <a href="#how" data-jump="how-data">Your data</a>
+          <a href="#how" data-jump="how-limits">Limits</a>
+          <a href="#how" data-jump="how-ci">Pull requests</a>
+        </nav>
 
-        <h2>What happens when you scan</h2>
-        <ol class="walkthrough">
-          <li>
-            <h3>Checkov runs the policies</h3>
-            <p>You can paste one file, upload a zip, or link a public GitHub repository or folder. Configuration files are picked out (Terraform, CloudFormation, Kubernetes, Helm, Compose, Dockerfiles) and everything else is ignored. <a href="https://www.checkov.io/">Checkov</a>, an open-source analyzer with over 1,000 policies, then reports each resource that fails a policy, with the file and lines involved. The same files always give the same findings.</p>
-          </li>
-          <li>
-            <h3>The findings get explained</h3>
-            <p>The files and Checkov's findings go to a language model: gpt-oss-120b on Groq for free explained scans, or the model you pick with your own API key. For each finding it says what is actually at risk in your code and which setting to change. It also points out problems no policy covers, such as passwords in a Docker Compose file. Those are listed separately and don't affect the score.</p>
-          </li>
-          <li>
-            <h3>Earlier fixes are checked</h3>
-            <p>Findings are turned into embeddings by a small open model (bge-small) that runs on this server, and compared with findings from your own earlier scans stored in PostgreSQL with pgvector. The closest matches and the patches written for them are used as examples, which keeps fixes consistent between files. Only your scans are searched.</p>
-          </li>
-          <li>
-            <h3>A patch is written</h3>
-            <p>The model rewrites each file with its findings addressed and marks changed lines with a <code># FIXED:</code> comment. The page shows each patch as a diff against the original. For projects, the files with the most serious findings are patched first.</p>
-          </li>
-          <li>
-            <h3>The scan is saved</h3>
-            <p>It goes into your history. A copy of the original and patched files is written to a private S3 bucket.</p>
-          </li>
-        </ol>
+        <article class="prose">
+          <span class="eyebrow">How it works</span>
+          <h1>How CloudGuard works</h1>
+          <p class="lead">CloudGuard checks Terraform, CloudFormation, Kubernetes, Compose and Dockerfiles for security mistakes before they're deployed. A proven static analyzer finds the problems; a language model explains them in terms of your code and writes the fix.</p>
 
-        <h2>Free explained scans and your own key</h2>
-        <p>Checkov results are always free. Explanations, extra review findings and patches use a language model, so each visitor gets a few explained scans per day on this site's Groq account. After that, scans still run Checkov and show every finding, just without explanations or patches.</p>
-        <p>You can also use your own API key from OpenAI, Anthropic, Google, xAI, Groq or Mistral in <button class="link-btn inline" type="button" data-open-model>Model settings</button>. CloudGuard lists the models your key can use and suggests one. Scans with your key have no daily limit, cover larger projects, and are billed to your account by the provider. Diagram checks always use your own key.</p>
+          <h2 id="how-scan">What happens when you scan</h2>
+          <ol class="walkthrough">
+            <li>
+              <h3>Checkov runs the policies</h3>
+              <p>Paste one file, upload a zip, or link a public GitHub repository or folder. Configuration files are picked out and everything else is ignored. <a href="https://www.checkov.io/">Checkov</a>, an open-source analyzer with over a thousand policies, reports each resource that fails a policy, with the file and lines involved. The same files always give the same findings.</p>
+            </li>
+            <li>
+              <h3>The findings get explained</h3>
+              <p>The files and Checkov's findings go to a language model: gpt-oss-120b on Groq for free explained scans, or the model you pick with your own API key. For each finding it says what's actually at risk in your code and which setting to change. It also points out problems no policy covers, such as passwords in a Compose file. Those are listed separately and don't affect the score.</p>
+            </li>
+            <li>
+              <h3>Earlier fixes are checked</h3>
+              <p>Findings become embeddings through a small open model (bge-small) running on this server and are compared with your own earlier scans in PostgreSQL with pgvector. The closest matches, and the patches written for them, are given to the model as examples so fixes stay consistent. Only your scans are searched.</p>
+            </li>
+            <li>
+              <h3>A patch is written</h3>
+              <p>The model rewrites each file with its findings addressed and marks changed lines with a <code># FIXED:</code> comment. The report shows the patch as a diff next to the annotated original. For projects, the files with the most serious findings are patched first.</p>
+            </li>
+            <li>
+              <h3>The scan is saved</h3>
+              <p>It goes into your history, and a copy of the original and patched files goes to a private S3 bucket.</p>
+            </li>
+          </ol>
 
-        <h2>How the score works</h2>
-        <p>Only Checkov findings count, so the score is the same every time you scan the same file. CloudGuard rates each Checkov policy itself, because the open-source release doesn't include severities: public access and secrets are critical, missing encryption is high, logging and backups are medium, and tags and monitoring are low. Each finding adds points:</p>
-        <table class="score-table">
-          <thead><tr><th>Severity</th><th>Points</th></tr></thead>
-          <tbody>
-            <tr><td><span class="sev sev-critical">Critical</span></td><td>30</td></tr>
-            <tr><td><span class="sev sev-high">High</span></td><td>12</td></tr>
-            <tr><td><span class="sev sev-medium">Medium</span></td><td>4</td></tr>
-            <tr><td><span class="sev sev-low">Low</span></td><td>1</td></tr>
-          </tbody>
-        </table>
-        <p>The score is 100 × e<sup>−points / 80</sup>. The first serious problems cost the most, and a long list of minor warnings can't drag an otherwise sound file to zero. One critical finding gives 69, one high gives 86, and ten low ones give 88. Files Checkov doesn't support, such as Docker Compose, aren't scored.</p>
+          <h2 id="how-free">Free explained scans and your own key</h2>
+          <p>Checkov scans are always free and unlimited. Explanations, extra review findings and patches use a language model, so each visitor gets a few explained scans a day on this site's Groq account. The free model also has a small per-minute allowance shared by everyone; when it's busy, or used up for the day, scans still show every Checkov finding and the report says when to try again.</p>
+          <p>You can also bring your own API key from OpenAI, Anthropic, Google, xAI, Groq or Mistral in <button class="link-btn inline" type="button" data-open-model>Model settings</button>. CloudGuard lists the models your key can use and suggests one. Scans with your key have no daily limit, cover larger projects, and are billed to your account by the provider.</p>
 
-        <h2>Diagram check</h2>
-        <p>The model you chose in Model settings reads the image and the Terraform together, so it has to be one that accepts images. It reports resources that appear in one but not the other, subnets placed differently, and connections the security groups or route tables don't allow. It doesn't try to read things like IAM permissions or port numbers from a picture. The Terraform also goes through a normal scan. A diagram check uses one of your free explained scans.</p>
+          <h2 id="how-score">How the score works</h2>
+          <p>Only Checkov findings count, so the score is the same every time you scan the same files. CloudGuard rates each policy itself, because the open-source release doesn't include severities: public access and secrets are critical, missing encryption is high, logging and backups are medium, tags and monitoring are low. Each finding adds points:</p>
+          <table class="score-table">
+            <thead><tr><th>Severity</th><th>Points</th></tr></thead>
+            <tbody>
+              <tr><td><span class="sev sev-critical">Critical</span></td><td>30</td></tr>
+              <tr><td><span class="sev sev-high">High</span></td><td>12</td></tr>
+              <tr><td><span class="sev sev-medium">Medium</span></td><td>4</td></tr>
+              <tr><td><span class="sev sev-low">Low</span></td><td>1</td></tr>
+            </tbody>
+          </table>
+          <p>The score is 100 × e<sup>−points / 80</sup>. The first serious problems cost the most, and a long list of minor warnings can't drag an otherwise sound file to zero: one critical finding gives 69, one high gives 86, ten low ones give 88. File types Checkov doesn't support, such as Compose, aren't scored.</p>
 
-        <h2>Your data</h2>
-        <ul>
-          <li>There are no accounts. The first time you visit, your browser gets a random ID in a cookie, and every scan you run is filed under it. Nobody else can list, open or search your scans, and they're never used as examples for anyone else's patch.</li>
-          <li>Because history belongs to the cookie, it won't follow you to another device. Clearing your cookies loses access to it.</li>
-          <li><strong>Clear history</strong> deletes your scans and findings from the database. The file copies in S3 aren't linked to your browser and aren't shown to anyone.</li>
-          <li>Checkov and the embedding model run on this server. For explained scans, the files are also sent to the model provider: Groq on the free tier, or whichever provider your own key belongs to. Don't include real passwords or keys in what you scan; swap them for placeholders first.</li>
-          <li>If you add your own API key, it's kept in this browser (or only for the session if you untick "Remember on this device") and sent with each scan over HTTPS. The server hands it to the provider for that request and never stores or logs it. <strong>Forget key</strong> in Model settings removes it.</li>
-          <li>Repositories are downloaded from GitHub for the scan and not kept, apart from the files saved with your scan.</li>
-          <li>The free-scan counter stores a keyed hash of your IP address, not the address itself.</li>
-        </ul>
+          <h2 id="how-diagram">Diagram check</h2>
+          <p>The model you chose in Model settings reads the image and the Terraform together, so it needs to accept images. It reports resources that appear in one but not the other, subnets placed differently, and connections the security groups or route tables don't allow. It doesn't try to read IAM permissions or port numbers from a picture. The Terraform also goes through a normal scan. Diagram checks always use your own key.</p>
 
-        <h2>Limits</h2>
-        <ul>
-          <li>Checkov only knows the policies it ships with. Passing every policy doesn't mean a file is secure.</li>
-          <li>Explanations and review findings come from a language model. They can be wrong or miss things, which is why they never change the score.</li>
-          <li>Read a patch before applying it and run <code>terraform plan</code>. A rewrite can change more than the lines it marks.</li>
-          <li>Pasted files can be up to 120,000 characters. Zips can be up to 10&nbsp;MB and repositories up to 25&nbsp;MB compressed, with at most 400 configuration files. Diagrams can be up to 8&nbsp;MB. Scans are rate limited per IP address.</li>
-          <li>The free explanation model has a small per-minute allowance shared by every visitor. Large projects get explanations for the files with the most serious findings, and patches for up to three files. When the model is busy, the scan shows Checkov results and says so.</li>
-        </ul>
+          <h2 id="how-data">Your data</h2>
+          <ul>
+            <li>There are no accounts. Your browser gets a random ID in a cookie the first time you visit, and every scan you run is filed under it. Nobody else can list, open or search your scans, and they're never used as examples for anyone else.</li>
+            <li>History belongs to that cookie, so it won't follow you to another device, and clearing cookies loses it.</li>
+            <li><strong>Clear history</strong> deletes your scans and findings from the database. The file copies in S3 aren't linked to your browser and aren't shown to anyone.</li>
+            <li>Checkov and the embedding model run on this server. For explained scans the files also go to the model provider: Groq on the free tier, or whichever provider your key belongs to. Swap real passwords and keys for placeholders before scanning.</li>
+            <li>Your own API key stays in this browser (or only for the session if you untick "Remember on this device") and is sent with each scan over HTTPS. The server passes it to the provider for that request and never stores or logs it.</li>
+            <li>Repositories are downloaded from GitHub for the scan and not kept, apart from the files saved with your scan. The free-scan counter stores a keyed hash of your IP address, not the address.</li>
+          </ul>
 
-        <h2>In your pull requests</h2>
-        <p>The same scan is available as a GitHub Action and a command-line tool. The action runs in your own CI with your own secrets, comments on each pull request with the findings in the files it changes, and can fail the check when something reaches a severity you choose. Setup is in the <a href="https://github.com/rajashekharsunkara/cloud-guard-ai#github-action">repository README</a>.</p>
+          <h2 id="how-limits">Limits</h2>
+          <ul>
+            <li>Checkov only knows the policies it ships with. Passing all of them doesn't make a file secure.</li>
+            <li>Explanations and review findings come from a language model. They can be wrong or incomplete, which is why they never change the score.</li>
+            <li>Read a patch before applying it and run <code>terraform plan</code>. A rewrite can change more than the lines it marks.</li>
+            <li>Pasted files can be up to 120,000 characters, zips up to 10&nbsp;MB, repositories up to 25&nbsp;MB compressed with at most 400 configuration files, and diagrams up to 8&nbsp;MB. Scans are rate limited per IP address.</li>
+          </ul>
 
-        <h2>API</h2>
-        <p>Everything on this site goes through a JSON API, including a streaming endpoint that reports progress as it runs. Reference and a request console are at <a href="/docs">/docs</a>.</p>
-      </article>
+          <h2 id="how-ci">In your pull requests</h2>
+          <p>The same scan runs as a GitHub Action and a command-line tool. The action runs in your own CI with your own secrets, comments on each pull request with findings in the files it changes, and can fail the check at a severity you choose. Setup is in the <a href="https://github.com/rajashekharsunkara/cloud-guard-ai#github-action">repository README</a>. Everything on this site also goes through a JSON API, documented at <a href="/docs">/docs</a>.</p>
+        </article>
+      </div>
     </section>
 
   </main>
+
+  <footer class="wrap site-foot">
+    <span class="status" id="status" data-state="unknown" title="Checking service status"><span class="status-dot"></span><span class="status-text">Checking</span></span>
+    <span>Findings by Checkov</span>
+    <span class="spacer"></span>
+    <a href="/docs">API</a>
+    <a href="https://github.com/rajashekharsunkara/cloud-guard-ai">Source</a>
+  </footer>
 
   <dialog class="dialog model-dialog" id="model-dialog">
     <form id="model-form">
@@ -298,7 +322,7 @@
         </label>
         <label class="choice">
           <input type="radio" name="model-mode" value="own">
-          <span><strong>My own API key</strong><small>No daily limit. Needed for diagram checks.</small></span>
+          <span><strong>My own API key</strong><small>No daily limit, larger projects, and diagram checks.</small></span>
         </label>
       </fieldset>
 
@@ -306,7 +330,7 @@
         <label class="field-label" for="llm-provider">Provider</label>
         <select class="text-field" id="llm-provider"></select>
 
-        <label class="field-label" for="llm-key">API key <a class="key-link" id="llm-key-link" href="#" target="_blank" rel="noopener noreferrer">Get a key</a></label>
+        <label class="field-label" for="llm-key">API key <a id="llm-key-link" href="#" target="_blank" rel="noopener noreferrer">Get a key</a></label>
         <div class="key-row">
           <input class="text-field" id="llm-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key">
           <button class="btn btn-quiet" id="btn-load-models" type="button">Check key</button>
@@ -316,12 +340,8 @@
         <select class="text-field" id="llm-model" disabled><option>Check your key to load models</option></select>
         <p class="field-help" id="llm-model-note"></p>
 
-        <label class="check">
-          <input type="checkbox" id="llm-remember" checked>
-          <span>Remember on this device</span>
-        </label>
-
-        <p class="field-help key-privacy">Your key stays in this browser and is sent over HTTPS with each scan. The server passes it to the provider for that scan and never stores or logs it. Usage is billed to your account by the provider.</p>
+        <label class="check"><input type="checkbox" id="llm-remember" checked><span>Remember on this device</span></label>
+        <p class="field-help">Your key stays in this browser and is sent over HTTPS with each scan. The server passes it to the provider for that scan and never stores or logs it. The provider bills your account.</p>
       </div>
 
       <div class="dialog-actions">
@@ -338,6 +358,7 @@
       <h2>Clear history?</h2>
       <p>This permanently deletes every scan and finding saved in this browser.</p>
       <div class="dialog-actions">
+        <span class="spacer"></span>
         <button class="btn btn-quiet" value="cancel">Cancel</button>
         <button class="btn btn-danger" value="confirm">Clear history</button>
       </div>
@@ -346,6 +367,6 @@
 
   <div class="toast-region" id="toasts" role="status" aria-live="polite"></div>
 
-  <script src="/static/js/app.js"></script>
+  <script type="module" src="/static/js/app.js"></script>
 </body>
 </html>

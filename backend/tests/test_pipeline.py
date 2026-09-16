@@ -394,11 +394,13 @@ async def test_rate_limited_free_review_says_so(mock_checkov, mock_review):
         and "40 seconds" in notice
         and "own API key" in notice
     )
-    assert result["analysis"]["limit"] == {
-        "kind": "busy",
-        "retry_after": 40,
-        "resets_at": None,
-    }
+    limit = result["analysis"]["limit"]
+    assert (limit["kind"], limit["retry_after"], limit["resets_at"]) == (
+        "busy",
+        40,
+        None,
+    )
+    assert limit["message"] == notice
 
 
 @pytest.mark.asyncio
@@ -613,3 +615,17 @@ def test_free_tier_state():
         ).isoformat()
         == "2026-09-17T00:00:00+00:00"
     )
+
+
+def test_report_sources_prefers_serious_files(monkeypatch):
+    from backend.app.services import pipeline
+
+    monkeypatch.setattr(pipeline, "MAX_REPORT_SOURCE_CHARS", 10)
+    files = {"a.tf": "aaaaaa", "b.tf": "bbbbbb", "c.tf": "cc", "clean.tf": "x"}
+    findings = [
+        {"file": "a.tf", "severity": "LOW"},
+        {"file": "b.tf", "severity": "CRITICAL"},
+        {"file": "c.tf", "severity": "MEDIUM"},
+        {"file": "", "severity": "HIGH"},
+    ]
+    assert pipeline.report_sources(files, findings) == {"b.tf": "bbbbbb", "c.tf": "cc"}

@@ -16,6 +16,9 @@ logger = logging.getLogger("cloudguard.pipeline")
 
 SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
 MAX_DIAGRAM_CONTEXT_CHARS = 60_000
+# Source kept with results so the report can show findings on their lines.
+MAX_REPORT_SOURCE_CHARS = 1_500_000
+MAX_REPORT_FILE_CHARS = 300_000
 
 
 class NoQuota:
@@ -334,8 +337,9 @@ class Scan:
         return True
 
     def _set_limit(self, limit: dict) -> None:
-        self.limit = limit
-        self.notices.append(limit_notice(limit))
+        message = limit_notice(limit)
+        self.limit = {**limit, "message": message}
+        self.notices.append(message)
 
     async def _model_steps(self) -> AsyncIterator[dict]:
         async for item in self._review():
@@ -551,6 +555,9 @@ class Scan:
             "security_score": self._score(),
             "vulnerabilities": self.findings + _by_severity(self.additional),
             "files": sorted(self.input.files),
+            "sources": report_sources(
+                self.input.files, self.findings + self.additional
+            ),
             "patches": self.patches,
             # Kept for single-file API clients.
             "patched_code": (
@@ -589,6 +596,7 @@ class Scan:
             analysis=result["analysis"],
             files=result["files"],
             patches=self.patches,
+            sources=result["sources"],
         )
         await agents.index_findings(
             self.db,
@@ -600,6 +608,24 @@ class Scan:
             result["vulnerabilities"],
         )
         await asyncio.to_thread(upload_artifacts, self.input, result)
+
+
+def report_sources(files: dict[str, str], findings: list[dict]) -> dict[str, str]:
+    """Contents of the files that have findings, most serious first, within a cap."""
+    worst = {}
+    for f in findings:
+        path = f.get("file")
+        if path in files and len(files[path]) <= MAX_REPORT_FILE_CHARS:
+            worst[path] = min(
+                SEVERITY_ORDER.get(f.get("severity"), 4), worst.get(path, 4)
+            )
+    sources, used = {}, 0
+    for path in sorted(worst, key=lambda p: (worst[p], p)):
+        if used + len(files[path]) > MAX_REPORT_SOURCE_CHARS:
+            continue
+        sources[path] = files[path]
+        used += len(files[path])
+    return sources
 
 
 def _patch_context(finding: dict) -> dict:

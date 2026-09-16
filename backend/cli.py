@@ -290,7 +290,9 @@ def _clean_notices(result: dict, choice: Optional[llm.LlmChoice]) -> None:
         # where no key simply means a Checkov-only scan.
         from backend.app.services.pipeline import limit_notice
 
-        analysis["notices"].remove(limit_notice(analysis["limit"]))
+        message = analysis["limit"].get("message") or limit_notice(analysis["limit"])
+        if message in analysis["notices"]:
+            analysis["notices"].remove(message)
         analysis["limit"] = None
     analysis["notices"] = [
         n.replace(" Check it in Model settings.", "").replace(" in Model settings", "")

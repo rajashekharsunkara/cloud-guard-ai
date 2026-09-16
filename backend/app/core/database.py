@@ -35,6 +35,7 @@ _UPGRADES = (
     "ALTER TABLE audits ALTER COLUMN security_score DROP NOT NULL",
     "ALTER TABLE audits ADD COLUMN IF NOT EXISTS files JSONB",
     "ALTER TABLE audits ADD COLUMN IF NOT EXISTS patches JSONB",
+    "ALTER TABLE audits ADD COLUMN IF NOT EXISTS sources JSONB",
     # Embeddings moved from Gemini (768 dims) to a local model (384 dims).
     # Old vectors can't be compared with new ones, so the column is replaced
     # once; findings stay, they just drop out of similarity search.
