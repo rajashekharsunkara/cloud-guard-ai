@@ -153,14 +153,15 @@ class TestAPIIntegration:
     @patch("backend.app.routers.auditor.DBService")
     def test_history_endpoint_success(self, mock_db_class):
         mock_db = MagicMock()
-        mock_db.get_audit_history = AsyncMock(
+        mock_db.list_audits = AsyncMock(
             return_value=[
                 {
                     "audit_id": "audit123",
                     "file_name": "main.tf",
-                    "vulnerability_type": "Exposed S3",
-                    "severity": "HIGH",
-                    "description": "Bucket public",
+                    "security_score": 85,
+                    "finding_count": 1,
+                    "severity_counts": {"HIGH": 1},
+                    "has_diagram": False,
                     "created_at": "2026-06-08T09:00:00",
                 }
             ]
@@ -180,6 +181,6 @@ class TestAPIIntegration:
             data = response.json()
             assert len(data) == 1
             assert data[0]["audit_id"] == "audit123"
-            assert data[0]["severity"] == "HIGH"
+            assert data[0]["severity_counts"] == {"HIGH": 1}
         finally:
             app.dependency_overrides.clear()

@@ -4,27 +4,30 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.config import settings
 from backend.app.core.database import get_db
+from backend.app.core.workspace import get_workspace_id
 from backend.app.schemas.auditor import (
+    AuditDetail,
     AuditRequest,
     AuditResult,
+    AuditSummary,
     HealthResponse,
-    HistoryItem,
     SearchRequest,
     SearchResponse,
     SearchResultItem,
 )
 from backend.app.services.agents import (
+    AuditError,
     calculate_security_score,
     find_similar_patches,
     generate_embedding,
-    persist_findings,
+    persist_audit,
     run_full_audit,
     run_patch_generation,
     run_security_audit,
@@ -91,12 +94,14 @@ async def health_check(db: AsyncSession = Depends(get_db)):
 async def audit_iac(
     request: AuditRequest,
     db: AsyncSession = Depends(get_db),
+    workspace_id: str = Depends(get_workspace_id),
 ):
     """Run the full audit pipeline on an IaC configuration."""
     result = await run_full_audit(
         iac_content=request.iac_content,
         file_name=request.file_name,
         db_service=DBService(db),
+        workspace_id=workspace_id,
     )
 
     await asyncio.to_thread(
@@ -118,9 +123,10 @@ async def audit_iac(
 @router.post("/audit/diagram", response_model=AuditResult)
 async def audit_with_diagram(
     iac_content: str = Form(...),
-    file_name: str = Form(default="main.tf"),
+    file_name: str = Form(default="main.tf", max_length=255),
     diagram: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
+    workspace_id: str = Depends(get_workspace_id),
 ):
     """Audit IaC with an architecture diagram for drift detection."""
     if diagram.content_type not in ALLOWED_DIAGRAM_TYPES:
@@ -143,7 +149,9 @@ async def audit_with_diagram(
         iac_content=iac_content,
         file_name=file_name,
         db_service=DBService(db),
+        workspace_id=workspace_id,
         image_bytes=image_bytes,
+        image_type=diagram.content_type,
     )
     return AuditResult(**result)
 
@@ -152,6 +160,7 @@ async def _stream_audit_events(
     iac_content: str,
     file_name: str,
     db: AsyncSession,
+    workspace_id: str,
 ):
     db_service = DBService(db)
 
@@ -164,31 +173,33 @@ async def _stream_audit_events(
         return f"data: {json.dumps(payload)}\n\n"
 
     try:
-        yield send_event("security_scan", "running", "Scanning configuration...")
+        yield send_event("security_scan", "running", "Reviewing configuration...")
         vulnerabilities = await run_security_audit(iac_content)
         yield send_event(
             "security_scan",
             "complete",
-            f"Found {len(vulnerabilities)} vulnerabilities",
+            f"{len(vulnerabilities)} findings",
             vulnerabilities,
         )
 
-        yield send_event("rag_retrieval", "running", "Searching historical patches...")
-        similar_patches = await find_similar_patches(db_service, vulnerabilities)
+        yield send_event("rag_retrieval", "running", "Checking your earlier fixes...")
+        similar_patches = await find_similar_patches(
+            db_service, workspace_id, vulnerabilities
+        )
         yield send_event(
             "rag_retrieval",
             "complete",
-            f"Retrieved {len(similar_patches)} similar past patches",
+            f"{len(similar_patches)} related fixes from earlier scans",
         )
 
         patched_code = ""
         if vulnerabilities:
-            yield send_event("patch_generation", "running", "Generating secure code...")
+            yield send_event("patch_generation", "running", "Writing a patch...")
             patched_code = await run_patch_generation(
                 iac_content, vulnerabilities, similar_patches
             )
             yield send_event(
-                "patch_generation", "complete", "Patched code generated", patched_code
+                "patch_generation", "complete", "Patch written", patched_code
             )
 
         score = calculate_security_score(vulnerabilities)
@@ -196,42 +207,36 @@ async def _stream_audit_events(
             "scoring", "complete", f"Security Score: {score}/100", {"score": score}
         )
 
-        yield send_event("storage", "running", "Storing results...")
-        audit_id = uuid.uuid4().hex[:12]
-        await persist_findings(
-            db_service, audit_id, file_name, iac_content, patched_code, vulnerabilities
-        )
-        await asyncio.to_thread(
-            _upload_audit_artifacts,
-            iac_content,
-            file_name,
-            {"audit_id": audit_id, "patched_code": patched_code},
-        )
-        yield send_event("storage", "complete", "Results persisted")
+        yield send_event("storage", "running", "Saving to your history...")
+        result = {
+            "audit_id": uuid.uuid4().hex[:12],
+            "file_name": file_name,
+            "security_score": score,
+            "vulnerabilities": vulnerabilities,
+            "patched_code": patched_code,
+            "similar_past_audits": [p.get("description", "") for p in similar_patches],
+        }
+        await persist_audit(db_service, workspace_id, result, iac_content)
+        await asyncio.to_thread(_upload_audit_artifacts, iac_content, file_name, result)
+        yield send_event("storage", "complete", "Saved")
 
-        yield send_event(
-            "done",
-            "complete",
-            data={
-                "audit_id": audit_id,
-                "security_score": score,
-                "vulnerabilities": vulnerabilities,
-                "patched_code": patched_code,
-            },
-        )
+        yield send_event("done", "complete", data=result)
+    except AuditError as e:
+        yield send_event("error", "error", str(e))
     except Exception:
         logger.exception("streaming audit failed")
-        yield send_event("error", "error", "Audit failed; check server logs")
+        yield send_event("error", "error", "The scan failed. Please try again.")
 
 
 @router.post("/audit/stream")
 async def audit_stream(
     request: AuditRequest,
     db: AsyncSession = Depends(get_db),
+    workspace_id: str = Depends(get_workspace_id),
 ):
     """Stream audit progress via Server-Sent Events."""
     return StreamingResponse(
-        _stream_audit_events(request.iac_content, request.file_name, db),
+        _stream_audit_events(request.iac_content, request.file_name, db, workspace_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -245,10 +250,13 @@ async def audit_stream(
 async def search_audits(
     request: SearchRequest,
     db: AsyncSession = Depends(get_db),
+    workspace_id: str = Depends(get_workspace_id),
 ):
-    """Semantic search over past audit findings using pgvector."""
+    """Semantic search over this workspace's past findings."""
     query_embedding = await generate_embedding(request.query)
-    results = await DBService(db).search_similar(query_embedding, limit=request.limit)
+    results = await DBService(db).search_similar(
+        query_embedding, workspace_id, limit=request.limit
+    )
 
     return SearchResponse(
         query=request.query,
@@ -257,7 +265,32 @@ async def search_audits(
     )
 
 
-@router.get("/history", response_model=list[HistoryItem])
-async def get_history(db: AsyncSession = Depends(get_db)):
-    """Retrieve recent audit history."""
-    return await DBService(db).get_audit_history()
+@router.get("/history", response_model=list[AuditSummary])
+async def get_history(
+    db: AsyncSession = Depends(get_db),
+    workspace_id: str = Depends(get_workspace_id),
+):
+    """Scans made from this browser, newest first."""
+    return await DBService(db).list_audits(workspace_id)
+
+
+@router.get("/history/{audit_id}", response_model=AuditDetail)
+async def get_history_item(
+    audit_id: str,
+    db: AsyncSession = Depends(get_db),
+    workspace_id: str = Depends(get_workspace_id),
+):
+    audit = await DBService(db).get_audit(workspace_id, audit_id)
+    if audit is None:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    return audit
+
+
+@router.delete("/history", status_code=204)
+async def clear_history(
+    db: AsyncSession = Depends(get_db),
+    workspace_id: str = Depends(get_workspace_id),
+):
+    """Delete every scan and finding stored for this browser."""
+    await DBService(db).clear_workspace(workspace_id)
+    return Response(status_code=204)

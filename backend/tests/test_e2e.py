@@ -107,21 +107,34 @@ class TestEndToEndWorkflow:
             history_audit_ids = [item["audit_id"] for item in history_data]
             assert audit_id in history_audit_ids
 
-            # Cleanup
-            s3_client = get_s3_client()
-            s3_client.delete_object(
-                Bucket=settings.s3_bucket_name, Key=uploaded_scan_key[0]
-            )
-            s3_client.delete_object(
-                Bucket=settings.s3_bucket_name, Key=uploaded_patched_key[0]
-            )
+            detail_resp = await client.get(f"/api/history/{audit_id}")
+            assert detail_resp.status_code == 200
+            assert detail_resp.json()["original_code"] == audit_payload["iac_content"]
 
-            from sqlalchemy import delete
-            from backend.app.core.database import async_session
-            from backend.app.services.db_service import Vulnerability
+        # A different browser gets its own workspace and sees none of it.
+        async with AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as stranger:
+            history = (await stranger.get("/api/history")).json()
+            assert audit_id not in [item["audit_id"] for item in history]
+            assert (await stranger.get(f"/api/history/{audit_id}")).status_code == 404
 
-            async with async_session() as session:
-                await session.execute(
-                    delete(Vulnerability).where(Vulnerability.audit_id == audit_id)
-                )
-                await session.commit()
+            search = (await stranger.post("/api/search", json=search_payload)).json()
+            assert all(r["audit_id"] != audit_id for r in search["results"])
+
+        # Cleanup
+        s3_client = get_s3_client()
+        s3_client.delete_object(
+            Bucket=settings.s3_bucket_name, Key=uploaded_scan_key[0]
+        )
+        s3_client.delete_object(
+            Bucket=settings.s3_bucket_name, Key=uploaded_patched_key[0]
+        )
+
+        async with AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://test",
+            cookies=client.cookies,
+        ) as owner:
+            assert (await owner.delete("/api/history")).status_code == 204
+            assert (await owner.get("/api/history")).json() == []

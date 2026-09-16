@@ -19,8 +19,8 @@ Focus on these common vulnerability categories:
 - Lack of resource tagging
 - Missing backup or versioning configurations
 
-Provide your response as a valid JSON array of vulnerability objects.
-If no vulnerabilities are found, return an empty array [].
+Respond with a JSON object of the form {{"findings": [...]}}, where each item has the fields above.
+If no vulnerabilities are found, return {{"findings": []}}.
 
 IaC Configuration to Audit:
 ---

@@ -25,11 +25,22 @@ class Base(DeclarativeBase):
     pass
 
 
+# create_all never alters existing tables, so columns added after the first
+# deploy are applied here. Each statement must be safe to run repeatedly.
+_UPGRADES = (
+    "ALTER TABLE vulnerabilities ADD COLUMN IF NOT EXISTS workspace_id VARCHAR",
+    "CREATE INDEX IF NOT EXISTS ix_vulnerabilities_workspace_id "
+    "ON vulnerabilities (workspace_id)",
+)
+
+
 async def init_db() -> None:
     """Install pgvector extension and create all tables."""
     async with engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
+        for statement in _UPGRADES:
+            await conn.execute(text(statement))
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

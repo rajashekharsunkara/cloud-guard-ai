@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from langchain_core.messages import AIMessage
 
 from backend.app.services.agents import (
+    AuditError,
     run_security_audit,
     run_patch_generation,
     run_diagram_analysis,
@@ -57,13 +58,38 @@ class TestAgentsUnit:
 
     @pytest.mark.asyncio
     @patch("backend.app.services.agents._get_groq_llm")
-    async def test_run_security_audit_malformed_json_fallback(self, mock_get_llm):
+    async def test_run_security_audit_malformed_json_raises(self, mock_get_llm):
+        # An unreadable answer must not be mistaken for a clean scan.
         mock_llm = AsyncMock()
         mock_get_llm.return_value = mock_llm
         mock_llm.ainvoke.return_value = AIMessage(content="This is not JSON!")
 
+        with pytest.raises(AuditError):
+            await run_security_audit("dummy config")
+
+    @pytest.mark.asyncio
+    @patch("backend.app.services.agents._get_groq_llm")
+    async def test_run_security_audit_findings_object(self, mock_get_llm):
+        mock_llm = AsyncMock()
+        mock_get_llm.return_value = mock_llm
+        mock_llm.ainvoke.return_value = AIMessage(
+            content=json.dumps(
+                {"findings": [{"title": "Open SSH", "severity": "HIGH"}, "junk"]}
+            )
+        )
+
         result = await run_security_audit("dummy config")
-        assert result == []
+        assert result == [{"title": "Open SSH", "severity": "HIGH"}]
+        mock_get_llm.assert_called_once_with(json_mode=True)
+
+    @pytest.mark.asyncio
+    @patch("backend.app.services.agents._get_groq_llm")
+    async def test_run_security_audit_empty_findings(self, mock_get_llm):
+        mock_llm = AsyncMock()
+        mock_get_llm.return_value = mock_llm
+        mock_llm.ainvoke.return_value = AIMessage(content='{"findings": []}')
+
+        assert await run_security_audit("dummy config") == []
 
     @pytest.mark.asyncio
     @patch("backend.app.services.agents._get_groq_llm")
@@ -118,11 +144,13 @@ class TestAgentsUnit:
             ]
         )
         mock_db.save_vulnerability = AsyncMock()
+        mock_db.save_audit = AsyncMock()
 
         result = await run_full_audit(
             iac_content="insecure config code",
             file_name="deployment.tf",
             db_service=mock_db,
+            workspace_id="a" * 32,
         )
 
         assert result["security_score"] == 85  # 100 - 15 (HIGH)
@@ -131,5 +159,21 @@ class TestAgentsUnit:
         assert result["similar_past_audits"] == ["Past port patch"]
 
         mock_scan.assert_called_once_with("insecure config code")
-        mock_db.search_similar.assert_called_once()
+        assert mock_db.search_similar.call_args.args[1] == "a" * 32
+        mock_db.save_audit.assert_called_once()
+        assert mock_db.save_audit.call_args.kwargs["workspace_id"] == "a" * 32
         mock_db.save_vulnerability.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch("backend.app.services.agents.run_security_audit")
+    async def test_run_full_audit_without_workspace_skips_storage(self, mock_scan):
+        mock_scan.return_value = []
+        mock_db = MagicMock()
+        mock_db.save_audit = AsyncMock()
+
+        result = await run_full_audit(
+            "clean config here", "main.tf", db_service=mock_db
+        )
+
+        assert result["security_score"] == 100
+        mock_db.save_audit.assert_not_called()

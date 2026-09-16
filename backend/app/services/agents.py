@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 import logging
@@ -16,7 +17,7 @@ logger = logging.getLogger("cloudguard.agents")
 
 PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
-AUDITOR_MODEL = "llama-3.3-70b-versatile"
+AUDITOR_MODEL = "openai/gpt-oss-120b"
 VISION_MODEL = "gemini-2.5-flash"
 EMBEDDING_MODEL = "models/gemini-embedding-2"
 EMBEDDING_DIM = 768
@@ -34,12 +35,21 @@ def _strip_code_fence(content: str) -> str:
     return content
 
 
-def _get_groq_llm() -> ChatGroq:
+class AuditError(RuntimeError):
+    """The model's answer couldn't be used, so there is no trustworthy result."""
+
+
+def _get_groq_llm(json_mode: bool = False) -> ChatGroq:
+    extra = {"response_format": {"type": "json_object"}} if json_mode else {}
     return ChatGroq(
         api_key=settings.groq_api_key,
         model=AUDITOR_MODEL,
         temperature=0.1,
-        max_tokens=4096,
+        # Reasoning tokens count against this limit, so leave room for them
+        # on top of a full rewritten configuration.
+        max_tokens=16384,
+        reasoning_effort="medium",
+        model_kwargs=extra,
     )
 
 
@@ -64,9 +74,16 @@ async def generate_embedding(text: str) -> list[float]:
     return await model.aembed_query(text)
 
 
+async def _embed_all(texts: list[str]) -> list:
+    """Embed concurrently; a failed item comes back as its exception."""
+    return await asyncio.gather(
+        *(generate_embedding(t) for t in texts), return_exceptions=True
+    )
+
+
 async def run_security_audit(iac_content: str) -> list[dict]:
     logger.info("scanning IaC configuration (%d chars)", len(iac_content))
-    llm = _get_groq_llm()
+    llm = _get_groq_llm(json_mode=True)
     prompt = _load_prompt("security_rules.txt").format(iac_content=iac_content)
 
     response = await llm.ainvoke(
@@ -79,14 +96,21 @@ async def run_security_audit(iac_content: str) -> list[dict]:
     )
 
     try:
-        vulnerabilities = json.loads(_strip_code_fence(response.content))
-        if not isinstance(vulnerabilities, list):
-            return []
-        logger.info("found %d vulnerabilities", len(vulnerabilities))
-        return vulnerabilities
+        parsed = json.loads(_strip_code_fence(response.content))
     except (json.JSONDecodeError, IndexError) as e:
         logger.error("failed to parse auditor response: %s", e)
-        return []
+        parsed = None
+
+    if isinstance(parsed, dict):
+        parsed = parsed.get("findings")
+    # Treating an unreadable answer as "no findings" would report a clean
+    # scan for a file nobody actually reviewed.
+    if not isinstance(parsed, list):
+        raise AuditError("The review came back unreadable. Please run the scan again.")
+
+    vulnerabilities = [v for v in parsed if isinstance(v, dict)]
+    logger.info("found %d vulnerabilities", len(vulnerabilities))
+    return vulnerabilities
 
 
 async def run_patch_generation(
@@ -123,7 +147,9 @@ async def run_patch_generation(
     return _strip_code_fence(response.content)
 
 
-async def run_diagram_analysis(iac_content: str, image_bytes: bytes) -> str:
+async def run_diagram_analysis(
+    iac_content: str, image_bytes: bytes, mime_type: str = "image/png"
+) -> str:
     llm = _get_gemini_llm()
     prompt_text = _load_prompt("vision_audit.txt").format(iac_content=iac_content)
     image_b64 = base64.b64encode(image_bytes).decode("utf-8")
@@ -135,7 +161,7 @@ async def run_diagram_analysis(iac_content: str, image_bytes: bytes) -> str:
                     {"type": "text", "text": prompt_text},
                     {
                         "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{image_b64}"},
+                        "image_url": {"url": f"data:{mime_type};base64,{image_b64}"},
                     },
                 ]
             )
@@ -155,42 +181,64 @@ def calculate_security_score(vulnerabilities: list[dict]) -> int:
 
 
 async def find_similar_patches(
-    db_service, vulnerabilities: list[dict], limit: int = 3
+    db_service, workspace_id: str, vulnerabilities: list[dict], limit: int = 3
 ) -> list[dict]:
     """Look up past fixes for similar findings. Failures degrade to no context."""
-    if not (db_service and vulnerabilities):
+    if not (db_service and workspace_id and vulnerabilities):
         return []
     combined = " | ".join(v.get("description", "") for v in vulnerabilities)
     try:
         query_embedding = await generate_embedding(combined)
-        return await db_service.search_similar(query_embedding, limit=limit)
+        return await db_service.search_similar(
+            query_embedding, workspace_id, limit=limit
+        )
     except Exception:
         logger.warning("similar-patch lookup failed", exc_info=True)
         return []
 
 
-async def persist_findings(
+async def persist_audit(
     db_service,
-    audit_id: str,
-    file_name: str,
+    workspace_id: str,
+    audit: dict,
     iac_content: str,
-    patched_code: str,
-    vulnerabilities: list[dict],
 ) -> None:
-    """Embed and store each finding; one bad row shouldn't sink the rest."""
-    for vuln in vulnerabilities:
+    """Store the scan itself, then embed each finding for later search.
+
+    ``audit`` needs audit_id, file_name, security_score, vulnerabilities and
+    patched_code; diagram_analysis is optional.
+    """
+    audit_id = audit["audit_id"]
+    await db_service.save_audit(
+        audit_id=audit_id,
+        workspace_id=workspace_id,
+        file_name=audit["file_name"],
+        security_score=audit["security_score"],
+        findings=audit["vulnerabilities"],
+        original_code=iac_content,
+        patched_code=audit["patched_code"],
+        diagram_analysis=audit.get("diagram_analysis"),
+    )
+
+    vulns = audit["vulnerabilities"]
+    embeddings = await _embed_all([v.get("description", "") for v in vulns])
+
+    # One bad finding shouldn't sink the rest.
+    for vuln, embedding in zip(vulns, embeddings):
         try:
+            if isinstance(embedding, Exception):
+                raise embedding
             description = vuln.get("description", "")
-            embedding = await generate_embedding(description)
             await db_service.save_vulnerability(
                 audit_id=audit_id,
-                file_name=file_name,
+                workspace_id=workspace_id,
+                file_name=audit["file_name"],
                 vulnerability_type=vuln.get("title", "Unknown"),
                 severity=vuln.get("severity", "LOW"),
                 description=description,
                 resource=vuln.get("resource", ""),
                 original_code=iac_content[:2000],
-                patched_code=patched_code[:2000],
+                patched_code=audit["patched_code"][:2000],
                 embedding=embedding,
             )
         except Exception:
@@ -203,7 +251,9 @@ async def run_full_audit(
     iac_content: str,
     file_name: str,
     db_service=None,
+    workspace_id: Optional[str] = None,
     image_bytes: Optional[bytes] = None,
+    image_type: str = "image/png",
 ) -> dict:
     audit_id = uuid.uuid4().hex[:12]
     logger.info("starting audit %s for %s", audit_id, file_name)
@@ -211,7 +261,9 @@ async def run_full_audit(
     vulnerabilities = await run_security_audit(iac_content)
     security_score = calculate_security_score(vulnerabilities)
 
-    similar_patches = await find_similar_patches(db_service, vulnerabilities)
+    similar_patches = await find_similar_patches(
+        db_service, workspace_id, vulnerabilities
+    )
 
     patched_code = ""
     if vulnerabilities:
@@ -221,14 +273,11 @@ async def run_full_audit(
 
     diagram_analysis = None
     if image_bytes:
-        diagram_analysis = await run_diagram_analysis(iac_content, image_bytes)
-
-    if db_service:
-        await persist_findings(
-            db_service, audit_id, file_name, iac_content, patched_code, vulnerabilities
+        diagram_analysis = await run_diagram_analysis(
+            iac_content, image_bytes, image_type
         )
 
-    return {
+    result = {
         "audit_id": audit_id,
         "file_name": file_name,
         "security_score": security_score,
@@ -237,3 +286,8 @@ async def run_full_audit(
         "similar_past_audits": [p.get("description", "") for p in similar_patches],
         "diagram_analysis": diagram_analysis,
     }
+
+    if db_service and workspace_id:
+        await persist_audit(db_service, workspace_id, result, iac_content)
+
+    return result

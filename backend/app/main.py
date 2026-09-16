@@ -11,7 +11,9 @@ from fastapi.staticfiles import StaticFiles
 from backend.app.core.aws import ensure_bucket_exists
 from backend.app.core.config import settings
 from backend.app.core.database import init_db
+from backend.app.core.workspace import assign_workspace
 from backend.app.routers.auditor import router as auditor_router
+from backend.app.services.agents import AuditError
 
 logging.basicConfig(
     level=logging.DEBUG if settings.app_env == "development" else logging.INFO,
@@ -62,11 +64,17 @@ app.add_middleware(
     allow_origins=allowed_origins,
     # Credentialed requests cannot be combined with a wildcard origin.
     allow_credentials="*" not in allowed_origins,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
+app.middleware("http")(assign_workspace)
 
 app.include_router(auditor_router)
+
+
+@app.exception_handler(AuditError)
+async def audit_error_handler(request: Request, exc: AuditError):
+    return JSONResponse(status_code=502, content={"detail": str(exc)})
 
 
 @app.exception_handler(Exception)

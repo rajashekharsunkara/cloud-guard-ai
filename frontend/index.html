@@ -3,344 +3,254 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="CloudGuard scans Terraform and Docker Compose configurations for security issues and generates patched versions.">
+  <meta name="description" content="CloudGuard reviews Terraform and Docker Compose files for security problems and suggests a corrected version.">
   <title>CloudGuard</title>
   <link rel="stylesheet" href="/static/css/styles.css">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><path d='M50 10 L80 30 L80 60 C80 75 65 85 50 90 C35 85 20 75 20 60 L20 30 Z' fill='%232563eb'/></svg>">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%231c1c1a'/><path d='M16 6.5l8 3v6c0 5-3.4 8.4-8 10-4.6-1.6-8-5-8-10v-6l8-3z' fill='none' stroke='%23fafaf9' stroke-width='2.2' stroke-linejoin='round'/></svg>">
   <script>
-    // Apply the saved theme before first paint to avoid a flash.
     (function () {
-      var saved = localStorage.getItem("cg-theme");
+      var saved = null;
+      try { saved = localStorage.getItem("cg-theme"); } catch (e) {}
       var dark = saved ? saved === "dark"
         : window.matchMedia("(prefers-color-scheme: dark)").matches;
-      if (dark) document.documentElement.setAttribute("data-theme", "dark");
-      if (localStorage.getItem("cg-sidebar") === "rail") {
-        document.documentElement.setAttribute("data-sidebar", "rail");
-      }
+      document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
     })();
   </script>
 </head>
 <body>
   <svg width="0" height="0" style="position:absolute" aria-hidden="true">
     <defs>
-      <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z"/></symbol>
-      <symbol id="i-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></symbol>
-      <symbol id="i-scan" viewBox="0 0 24 24"><path d="M4 8V6a2 2 0 012-2h2M16 4h2a2 2 0 012 2v2M20 16v2a2 2 0 01-2 2h-2M8 20H6a2 2 0 01-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></symbol>
-      <symbol id="i-image" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><circle cx="9" cy="10" r="1.5"/><path d="M4 17l5-4 3 2.5L16 12l4 4"/></symbol>
-      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><line x1="20" y1="20" x2="15.5" y2="15.5"/></symbol>
-      <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l2.5 2.5"/></symbol>
-      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 10.6 4"/><path d="M20 5v6h-6"/></symbol>
-      <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5-11-6.5z"/></symbol>
-      <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3L5 13.5h5.5L10 21l8-10.5h-5.5L13 3z"/></symbol>
-      <symbol id="i-doc" viewBox="0 0 24 24"><path d="M7 3h7l4 4v14H7V3z"/><path d="M14 3v4h4"/></symbol>
-      <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V5M7.5 9.5L12 5l4.5 4.5"/><path d="M5 19h14"/></symbol>
+      <symbol id="i-mark" viewBox="0 0 24 24"><path d="M12 3l7 2.6v5.2c0 4.4-3 7.4-7 9.2-4-1.8-7-4.8-7-9.2V5.6L12 3z"/><path d="M9 11.8l2.2 2.2L15.2 10"/></symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4L6 18M18 6l1.4-1.4"/></symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.2A8 8 0 019.8 4 8 8 0 1020 14.2z"/></symbol>
       <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
-      <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
-      <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4L2.8 20h18.4L12 4z"/><line x1="12" y1="10" x2="12" y2="14"/><line x1="12" y1="17" x2="12" y2="17.01"/></symbol>
-      <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><line x1="12" y1="11" x2="12" y2="16"/><line x1="12" y1="8" x2="12" y2="8.01"/></symbol>
-      <symbol id="i-menu" viewBox="0 0 24 24"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></symbol>
-      <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M3 12h2M19 12h2M4.6 19.4L6 18M18 6l1.4-1.4"/></symbol>
-      <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 13.5A8 8 0 0110.5 4 8 8 0 1020 13.5z"/></symbol>
-      <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M4 13l2.5-7h11L20 13v6H4v-6z"/><path d="M4 13h5a3 3 0 006 0h5"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
+      <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+      <symbol id="i-back" viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 00-2-2H6a2 2 0 00-2 2v8a2 2 0 002 2h2"/></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19.5h14"/></symbol>
+      <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15.5V4.5M7.5 9L12 4.5 16.5 9M5 19.5h14"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></symbol>
     </defs>
   </svg>
 
-  <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
-  <div class="scrim" id="scrim"></div>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="wordmark" href="#scan">
+        <svg class="icon mark"><use href="#i-mark"/></svg>
+        <span>CloudGuard</span>
+      </a>
 
-  <header class="topbar">
-    <button class="menu-btn" id="menu-btn" aria-label="Open navigation">
-      <svg class="icon"><use href="#i-menu"/></svg>
-    </button>
-    <span class="topbar-title" id="topbar-title">Overview</span>
-  </header>
-
-  <div class="app">
-    <aside class="sidebar" id="sidebar">
-      <div class="brand">
-        <div class="brand-mark">
-          <svg class="icon"><use href="#i-shield"/></svg>
-        </div>
-        <div class="brand-text">
-          <h1>CloudGuard</h1>
-          <span class="brand-sub">IaC security auditing</span>
-        </div>
-        <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Collapse sidebar">
-          <svg class="icon"><use href="#i-menu"/></svg>
-        </button>
-      </div>
-
-      <nav class="nav-group" aria-label="Main">
-        <div class="nav-label">Workspace</div>
-        <button class="nav-item active" data-tab="dashboard" data-title="Overview">
-          <svg class="icon"><use href="#i-grid"/></svg><span>Overview</span>
-        </button>
-        <button class="nav-item" data-tab="scanner" data-title="Scanner">
-          <svg class="icon"><use href="#i-scan"/></svg><span>Scanner</span>
-        </button>
-        <button class="nav-item" data-tab="diagram" data-title="Diagram Check">
-          <svg class="icon"><use href="#i-image"/></svg><span>Diagram Check</span>
-        </button>
-        <button class="nav-item" data-tab="search" data-title="Search">
-          <svg class="icon"><use href="#i-search"/></svg><span>Search</span>
-        </button>
-        <button class="nav-item" data-tab="history" data-title="History">
-          <svg class="icon"><use href="#i-clock"/></svg><span>History</span>
-        </button>
+      <nav class="site-nav" aria-label="Main">
+        <a href="#scan" data-route="scan">Scan</a>
+        <a href="#diagram" data-route="diagram">Diagram check</a>
+        <a href="#history" data-route="history">History</a>
+        <a href="#how" data-route="how">How it works</a>
       </nav>
 
-      <div class="sidebar-foot">
-        <div class="service-status" id="service-status">
-          <div class="status-row">
-            <span>API</span>
-            <span class="status-value"><span class="status-dot" id="dot-api"></span><span id="txt-api">Checking</span></span>
-          </div>
-          <div class="status-row">
-            <span>Database</span>
-            <span class="status-value"><span class="status-dot" id="dot-db"></span><span id="txt-db">Checking</span></span>
-          </div>
-          <div class="status-row">
-            <span>Storage</span>
-            <span class="status-value"><span class="status-dot" id="dot-s3"></span><span id="txt-s3">Checking</span></span>
-          </div>
-        </div>
-        <button class="theme-toggle" id="theme-toggle">
-          <svg class="icon icon-moon"><use href="#i-moon"/></svg>
-          <svg class="icon icon-sun"><use href="#i-sun"/></svg>
-          <span id="theme-label">Dark mode</span>
+      <div class="header-tools">
+        <span class="status" id="status" data-state="unknown" title="Checking service status">
+          <span class="status-dot"></span><span class="status-text">Checking</span>
+        </span>
+        <button class="icon-btn" id="theme-toggle" type="button" aria-label="Switch to dark theme">
+          <svg class="icon show-light"><use href="#i-moon"/></svg>
+          <svg class="icon show-dark"><use href="#i-sun"/></svg>
         </button>
       </div>
-    </aside>
+    </div>
+  </header>
 
-    <main class="main">
+  <main class="container">
 
-      <!-- Overview -->
-      <section class="page active" id="page-dashboard">
-        <div class="page-head">
-          <div>
-            <h2>Overview</h2>
-            <p class="lede">Scan activity and service health at a glance</p>
-          </div>
-          <button class="btn btn-secondary" id="btn-refresh-dash">
-            <svg class="icon"><use href="#i-refresh"/></svg>Refresh
-          </button>
-        </div>
+    <section class="view" id="view-scan" data-title="Scan">
+      <div class="view-head">
+        <h1>Scan a configuration</h1>
+        <p>Paste a Terraform or Docker Compose file. CloudGuard lists the security problems it finds and suggests a corrected file you can compare line by line. <a href="#how">How it works</a></p>
+      </div>
 
-        <div class="metrics">
-          <div class="metric">
-            <div class="metric-icon"><svg class="icon"><use href="#i-scan"/></svg></div>
-            <div>
-              <div class="metric-value" id="m-scans">0</div>
-              <div class="metric-label">Scans this session</div>
-            </div>
+      <div class="workspace">
+        <div class="editor">
+          <div class="editor-bar">
+            <label class="sr-only" for="file-name">File name</label>
+            <input class="filename" id="file-name" type="text" value="main.tf" maxlength="255" spellcheck="false" autocomplete="off">
+            <span class="editor-meta" id="editor-meta"></span>
+            <span class="spacer"></span>
+            <button class="link-btn" id="btn-example" type="button">Use example</button>
+            <button class="link-btn" id="btn-clear" type="button">Clear</button>
           </div>
-          <div class="metric">
-            <div class="metric-icon danger"><svg class="icon"><use href="#i-alert"/></svg></div>
-            <div>
-              <div class="metric-value" id="m-vulns">0</div>
-              <div class="metric-label">Findings</div>
-            </div>
+          <div class="editor-body">
+            <pre class="gutter" id="gutter" aria-hidden="true">1</pre>
+            <label class="sr-only" for="iac-input">Configuration</label>
+            <textarea id="iac-input" wrap="off" spellcheck="false" autocapitalize="off" autocomplete="off"
+              placeholder="resource &quot;aws_s3_bucket&quot; &quot;logs&quot; {&#10;  bucket = &quot;acme-app-logs&quot;&#10;}"></textarea>
           </div>
-          <div class="metric">
-            <div class="metric-icon ok"><svg class="icon"><use href="#i-check"/></svg></div>
-            <div>
-              <div class="metric-value" id="m-patches">0</div>
-              <div class="metric-label">Patches generated</div>
-            </div>
-          </div>
-          <div class="metric">
-            <div class="metric-icon warn"><svg class="icon"><use href="#i-bolt"/></svg></div>
-            <div>
-              <div class="metric-value" id="m-rag">0</div>
-              <div class="metric-label">Historical matches</div>
-            </div>
+          <div class="editor-foot">
+            <span class="hint"><kbd>Ctrl</kbd> <kbd>Enter</kbd> to scan</span>
+            <button class="btn btn-primary" id="btn-scan" type="button">Scan</button>
           </div>
         </div>
 
-        <div class="panel">
-          <div class="panel-head">
-            <h3>Recent findings</h3>
-            <span class="meta" id="activity-meta"></span>
-          </div>
-          <div id="recent-activity">
-            <div class="loading"><div class="spinner"></div></div>
-          </div>
-        </div>
-      </section>
-
-      <!-- Scanner -->
-      <section class="page" id="page-scanner">
-        <div class="page-head">
-          <div>
-            <h2>Scanner</h2>
-            <p class="lede">Paste a Terraform or Docker Compose configuration to audit it</p>
-          </div>
-        </div>
-
-        <div class="panel">
-          <div class="panel-head">
-            <h3>Configuration</h3>
-            <div class="field-inline">
-              <label for="file-name-input">Filename</label>
-              <input type="text" id="file-name-input" class="text-input" value="main.tf" style="width: 132px;">
-            </div>
+        <aside class="side">
+          <div id="side-idle">
+            <h2 class="side-title">What it looks for</h2>
+            <ul class="checks">
+              <li>Storage buckets and databases reachable from the internet</li>
+              <li>Data stored or sent without encryption</li>
+              <li>Security groups and IAM policies that allow too much</li>
+              <li>Passwords, tokens and keys written into the file</li>
+              <li>Missing logging, versioning and backups</li>
+              <li>Resources without ownership tags</li>
+            </ul>
+            <p class="side-note">A scan takes 10 to 30 seconds. Results are a review, not a guarantee. Read the <a href="#how">limits</a> before relying on them.</p>
           </div>
 
-          <textarea class="code-editor" id="iac-input" spellcheck="false" placeholder='resource "aws_s3_bucket" "data" {
-  bucket = "my-data-bucket"
-  acl    = "public-read"
-}'></textarea>
+          <div id="side-progress" hidden>
+            <h2 class="side-title">Progress</h2>
+            <ol class="steps" id="steps"></ol>
+          </div>
+        </aside>
+      </div>
 
-          <div class="btn-row">
-            <button class="btn btn-primary" id="btn-scan">
-              <svg class="icon"><use href="#i-play"/></svg>Run audit
-            </button>
-            <button class="btn btn-secondary" id="btn-scan-stream">
-              <svg class="icon"><use href="#i-bolt"/></svg>Run with live progress
-            </button>
-            <button class="btn btn-secondary" id="btn-sample">
-              <svg class="icon"><use href="#i-doc"/></svg>Load sample
-            </button>
+      <div class="report" id="scan-report" hidden></div>
+    </section>
+
+    <section class="view" id="view-diagram" data-title="Diagram check" hidden>
+      <div class="view-head">
+        <h1>Diagram check</h1>
+        <p>Upload an architecture diagram with the Terraform that's meant to build it. CloudGuard reports resources and connections that don't match, then runs the usual security scan on the code.</p>
+      </div>
+
+      <div class="diagram-grid">
+        <div class="editor">
+          <div class="editor-bar">
+            <span class="editor-label">Terraform</span>
+          </div>
+          <div class="editor-body short">
+            <label class="sr-only" for="diagram-iac">Terraform configuration</label>
+            <textarea id="diagram-iac" wrap="off" spellcheck="false" placeholder="Paste the Terraform for the environment in the diagram"></textarea>
           </div>
         </div>
 
-        <div class="panel" id="pipeline-panel" hidden>
-          <div class="panel-head"><h3>Pipeline</h3></div>
-          <div class="steps" id="pipeline-steps"></div>
-        </div>
-
-        <div id="scan-results" hidden>
-          <div class="panel score-panel">
-            <div class="gauge">
-              <svg viewBox="0 0 120 120">
-                <circle class="track" cx="60" cy="60" r="52"></circle>
-                <circle class="fill" id="score-circle" cx="60" cy="60" r="52"
-                  stroke-dasharray="326.7" stroke-dashoffset="326.7"></circle>
-              </svg>
-              <div class="gauge-text">
-                <div class="gauge-value" id="score-display">0</div>
-                <div class="gauge-label">Score</div>
-              </div>
-            </div>
-            <div class="score-summary">
-              <h3 id="score-headline">Security score</h3>
-              <p id="score-note"></p>
-              <div class="severity-tally" id="severity-tally"></div>
-            </div>
-          </div>
-
-          <div class="panel">
-            <div class="panel-head">
-              <h3>Findings</h3>
-              <span class="meta" id="vuln-count"></span>
-            </div>
-            <div class="finding-list" id="vuln-list"></div>
-          </div>
-
-          <div class="panel">
-            <div class="panel-head"><h3>Suggested patch</h3></div>
-            <div class="code-compare">
-              <div class="code-pane">
-                <div class="code-pane-head">
-                  <span>Original</span><span class="badge critical">Vulnerable</span>
-                </div>
-                <pre class="code-block" id="code-original"></pre>
-              </div>
-              <div class="code-pane">
-                <div class="code-pane-head">
-                  <span>Patched</span><span class="badge low">Hardened</span>
-                </div>
-                <pre class="code-block" id="code-patched"></pre>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- Diagram Check -->
-      <section class="page" id="page-diagram">
-        <div class="page-head">
-          <div>
-            <h2>Diagram Check</h2>
-            <p class="lede">Compare an architecture diagram against the Terraform that should implement it</p>
-          </div>
-        </div>
-
-        <div class="panel">
-          <div class="panel-head"><h3>Terraform configuration</h3></div>
-          <textarea class="code-editor" id="diagram-iac-input" spellcheck="false" placeholder="Paste the Terraform for the environment shown in your diagram"></textarea>
-        </div>
-
-        <div class="panel">
-          <div class="panel-head"><h3>Architecture diagram</h3></div>
-          <div class="dropzone" id="diagram-dropzone">
+        <label class="dropzone" id="dropzone" for="diagram-file">
+          <input type="file" id="diagram-file" accept="image/png,image/jpeg,image/webp">
+          <span class="dropzone-empty" id="dropzone-empty">
             <svg class="icon"><use href="#i-upload"/></svg>
-            <div class="dropzone-title">Drop an image or click to browse</div>
-            <div class="dropzone-sub">PNG, JPEG, or WebP · up to 8 MB</div>
-            <input type="file" id="diagram-file-input" accept="image/png,image/jpeg,image/webp">
-          </div>
-          <div class="preview" id="diagram-preview" hidden>
-            <img id="diagram-preview-img" alt="Selected architecture diagram">
-          </div>
-        </div>
+            <span class="dropzone-title">Choose a diagram or drop it here</span>
+            <span class="dropzone-sub">PNG, JPEG or WebP, up to 8 MB</span>
+          </span>
+          <img class="dropzone-preview" id="dropzone-preview" alt="Selected diagram" hidden>
+        </label>
+      </div>
 
-        <button class="btn btn-primary" id="btn-diagram-audit" disabled>
-          <svg class="icon"><use href="#i-play"/></svg>Compare
-        </button>
+      <div class="actions">
+        <span class="hint" id="diagram-file-name"></span>
+        <button class="btn btn-primary" id="btn-compare" type="button">Compare</button>
+      </div>
 
-        <div class="panel" id="diagram-results" hidden style="margin-top: 16px;">
-          <div class="panel-head"><h3>Drift report</h3></div>
-          <div id="diagram-analysis-content" class="code-block"></div>
-        </div>
-      </section>
+      <div class="report" id="diagram-report" hidden></div>
+    </section>
 
-      <!-- Search -->
-      <section class="page" id="page-search">
-        <div class="page-head">
+    <section class="view" id="view-history" data-title="History" hidden>
+      <div id="history-index">
+        <div class="view-head with-action">
           <div>
-            <h2>Search</h2>
-            <p class="lede">Find past findings by meaning, not keywords</p>
+            <h1>History</h1>
+            <p>Scans made in this browser. They're linked to a cookie rather than an account, so other visitors can't see them and they won't appear on your other devices.</p>
           </div>
+          <button class="btn btn-quiet" id="btn-clear-history" type="button">Clear history</button>
         </div>
 
-        <div class="panel">
-          <div class="search-bar">
-            <svg class="icon"><use href="#i-search"/></svg>
-            <input type="text" id="search-input" placeholder="Try &quot;publicly exposed S3 bucket&quot;">
-            <button class="btn btn-primary" id="btn-search">Search</button>
-          </div>
+        <form class="search" id="search-form" role="search">
+          <svg class="icon"><use href="#i-search"/></svg>
+          <label class="sr-only" for="search-input">Search findings</label>
+          <input type="search" id="search-input" minlength="3" maxlength="1000" placeholder="Search your findings">
+          <button class="btn btn-quiet" type="submit">Search</button>
+        </form>
 
-          <div id="search-results">
-            <div class="empty">
-              <svg class="icon"><use href="#i-search"/></svg>
-              <h3>Search previous audits</h3>
-              <p>Results are matched by embedding similarity, so related findings surface even when the wording differs.</p>
-            </div>
-          </div>
-        </div>
-      </section>
+        <div id="history-body"></div>
+      </div>
 
-      <!-- History -->
-      <section class="page" id="page-history">
-        <div class="page-head">
-          <div>
-            <h2>History</h2>
-            <p class="lede">Findings from previous scans</p>
-          </div>
-          <button class="btn btn-secondary" id="btn-refresh-history">
-            <svg class="icon"><use href="#i-refresh"/></svg>Refresh
-          </button>
-        </div>
+      <div id="history-detail" hidden>
+        <a class="back" href="#history"><svg class="icon"><use href="#i-back"/></svg>All scans</a>
+        <div class="report" id="history-report"></div>
+      </div>
+    </section>
 
-        <div class="panel">
-          <div id="history-list">
-            <div class="loading"><div class="spinner"></div></div>
-          </div>
-        </div>
-      </section>
+    <section class="view" id="view-how" data-title="How it works" hidden>
+      <article class="prose">
+        <h1>How CloudGuard works</h1>
+        <p class="lead">CloudGuard reviews infrastructure code for security mistakes before it gets deployed. It reads Terraform and Docker Compose files, explains each problem it finds, and suggests a corrected file.</p>
 
-    </main>
-  </div>
+        <h2>What happens when you scan</h2>
+        <ol class="walkthrough">
+          <li>
+            <h3>Review</h3>
+            <p>Your file is sent to OpenAI's open-weight gpt-oss-120b model, running on Groq, with instructions to look for the problems listed on the scan page. It returns a list of findings, each with a severity, the resource it affects and a suggested fix.</p>
+          </li>
+          <li>
+            <h3>Check earlier fixes</h3>
+            <p>Each finding is converted into an embedding with Google's Gemini embedding model and compared with findings from your own earlier scans, stored in PostgreSQL with pgvector. The closest matches and the patches written for them become examples for the next step, which keeps fixes consistent between files. Only your scans are searched.</p>
+          </li>
+          <li>
+            <h3>Write a patch</h3>
+            <p>The model rewrites the whole file with every finding addressed and marks changed lines with a <code># FIXED:</code> comment. The page shows it as a diff against what you pasted.</p>
+          </li>
+          <li>
+            <h3>Score</h3>
+            <p>The score starts at 100 and drops for each finding. It never goes below 0.</p>
+            <table class="score-table">
+              <thead><tr><th>Severity</th><th>Points</th></tr></thead>
+              <tbody>
+                <tr><td><span class="sev sev-critical">Critical</span></td><td>&minus;25</td></tr>
+                <tr><td><span class="sev sev-high">High</span></td><td>&minus;15</td></tr>
+                <tr><td><span class="sev sev-medium">Medium</span></td><td>&minus;8</td></tr>
+                <tr><td><span class="sev sev-low">Low</span></td><td>&minus;3</td></tr>
+              </tbody>
+            </table>
+          </li>
+          <li>
+            <h3>Save</h3>
+            <p>The scan goes into your history. A copy of the original and patched files is written to a private S3 bucket.</p>
+          </li>
+        </ol>
+
+        <h2>Diagram check</h2>
+        <p>Gemini&nbsp;2.5&nbsp;Flash reads the image and the Terraform together. It reports resources that appear in one but not the other, subnets placed differently, and connections the security groups or route tables don't allow. It doesn't try to read things like IAM permissions or port numbers from a picture. The Terraform also goes through a normal scan.</p>
+
+        <h2>Your data</h2>
+        <ul>
+          <li>There are no accounts. The first time you visit, your browser gets a random ID in a cookie, and every scan you run is filed under it. Nobody else can list, open or search your scans, and they're never used as examples for anyone else's patch.</li>
+          <li>Because history belongs to the cookie, it won't follow you to another device. Clearing your cookies loses access to it.</li>
+          <li><strong>Clear history</strong> deletes your scans and findings from the database. The file copies in S3 aren't linked to your browser and aren't shown to anyone.</li>
+          <li>What you paste is processed by Groq and Google. Don't paste real passwords or keys. Swap them for placeholders first.</li>
+        </ul>
+
+        <h2>Limits</h2>
+        <ul>
+          <li>Findings come from a language model. It can miss problems, flag things that are fine or get the severity wrong. Use it alongside static checkers such as Checkov, tfsec or Trivy, not instead of them.</li>
+          <li>Read a patch before applying it and run <code>terraform plan</code>. A rewrite can change more than the lines it marks.</li>
+          <li>Files can be up to 120,000 characters. Diagrams can be up to 8&nbsp;MB.</li>
+        </ul>
+
+        <h2>API</h2>
+        <p>Everything on this site goes through a JSON API, including a streaming endpoint that reports progress as it runs. Reference and a request console are at <a href="/docs">/docs</a>.</p>
+      </article>
+    </section>
+
+  </main>
+
+  <dialog class="dialog" id="confirm-clear">
+    <form method="dialog">
+      <h2>Clear history?</h2>
+      <p>This permanently deletes every scan and finding saved in this browser.</p>
+      <div class="dialog-actions">
+        <button class="btn btn-quiet" value="cancel">Cancel</button>
+        <button class="btn btn-danger" value="confirm">Clear history</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toast-region" id="toasts" role="status" aria-live="polite"></div>
 
   <script src="/static/js/app.js"></script>
 </body>

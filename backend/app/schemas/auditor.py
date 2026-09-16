@@ -53,10 +53,15 @@ class AuditResult(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class AuditDetail(AuditResult):
+    original_code: str = Field(default="", description="Configuration as submitted")
+
+
 class SearchResultItem(BaseModel):
     audit_id: str
     file_name: str
     vulnerability_type: str
+    severity: str = "LOW"
     description: str
     patched_code: str
     similarity_score: float = Field(..., description="Cosine similarity (0-1)")
@@ -68,12 +73,13 @@ class SearchResponse(BaseModel):
     total: int = 0
 
 
-class HistoryItem(BaseModel):
+class AuditSummary(BaseModel):
     audit_id: str
     file_name: str
-    vulnerability_type: str
-    severity: str
-    description: str
+    security_score: int
+    finding_count: int
+    severity_counts: dict[str, int] = {}
+    has_diagram: bool = False
     created_at: Optional[str] = None
 
 

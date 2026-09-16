@@ -1,6 +1,6 @@
 # CloudGuard
 
-Scans Terraform and Docker Compose configs for security issues using a multi-agent LLM pipeline — Groq (Llama 3.3) for auditing and patch generation, Gemini for embeddings and diagram analysis, pgvector for retrieval over past findings.
+Scans Terraform and Docker Compose configs for security issues using a multi-agent LLM pipeline — Groq (gpt-oss-120b) for auditing and patch generation, Gemini for embeddings and diagram analysis, pgvector for retrieval over past findings.
 
 **[Live demo](https://cloud-guard-ai.duckdns.org)** — running on AWS.
 
@@ -24,8 +24,12 @@ Dashboard is at `http://localhost:8000`. Swagger at `/docs`. Postgres and a Loca
 | `POST` | `/api/audit` | Full audit, JSON response |
 | `POST` | `/api/audit/stream` | Same pipeline, streamed as SSE |
 | `POST` | `/api/audit/diagram` | Audit + architecture diagram drift check |
-| `POST` | `/api/search` | Semantic search over past findings |
-| `GET` | `/api/history` | Recent audit history |
+| `POST` | `/api/search` | Semantic search over your past findings |
+| `GET` | `/api/history` | Your recent scans |
+| `GET` | `/api/history/{audit_id}` | One scan with findings, original and patched file |
+| `DELETE` | `/api/history` | Delete your scans and findings |
+
+There are no accounts. Each browser gets a random `cg_workspace` cookie on its first request, and scans, search and the past fixes used as patch examples are all limited to that workspace, so visitors never see each other's data. Rows saved before workspaces existed have no workspace and aren't returned to anyone.
 
 ## Configuration
 
