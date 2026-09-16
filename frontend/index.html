@@ -275,6 +275,9 @@
           <li>The free explanation model has a small per-minute allowance shared by every visitor. Large projects get explanations for the files with the most serious findings, and patches for up to three files. When the model is busy, the scan shows Checkov results and says so.</li>
         </ul>
 
+        <h2>In your pull requests</h2>
+        <p>The same scan is available as a GitHub Action and a command-line tool. The action runs in your own CI with your own secrets, comments on each pull request with the findings in the files it changes, and can fail the check when something reaches a severity you choose. Setup is in the <a href="https://github.com/rajashekharsunkara/cloud-guard-ai#github-action">repository README</a>.</p>
+
         <h2>API</h2>
         <p>Everything on this site goes through a JSON API, including a streaming endpoint that reports progress as it runs. Reference and a request console are at <a href="/docs">/docs</a>.</p>
       </article>

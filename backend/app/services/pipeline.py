@@ -9,12 +9,26 @@ from backend.app.core.config import settings
 from backend.app.services import agents, llm
 from backend.app.services.checkov import ScannerError, run_checkov, safe_relative_path
 from backend.app.services.severity import score_findings
-from backend.app.services.storage import StorageService
 
 logger = logging.getLogger("cloudguard.pipeline")
 
 SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
 MAX_DIAGRAM_CONTEXT_CHARS = 60_000
+
+
+class NoQuota:
+    """Quota for runs outside the web app (the CLI): no free tier at all."""
+
+    enabled = False
+
+    async def claim(self) -> bool:
+        return False
+
+    async def refund(self) -> None:
+        pass
+
+    async def remaining(self) -> int:
+        return 0
 
 
 class ScanFailed(Exception):
@@ -176,10 +190,11 @@ class Scan:
         if not self.covered_files:
             self.notices.append(self._coverage_notice())
 
-        yield event("storage", "running", "Saving to your history...")
         result = await self._result()
-        await self._persist(result)
-        yield event("storage", "complete", "Saved")
+        if self.db is not None:
+            yield event("storage", "running", "Saving to your history...")
+            await self._persist(result)
+            yield event("storage", "complete", "Saved")
         yield event("done", "complete", data=result)
 
     async def _static_checks(self) -> AsyncIterator[dict]:
@@ -491,6 +506,9 @@ def _patch_context(finding: dict) -> dict:
 def upload_artifacts(scan_input: ScanInput, result: dict) -> None:
     """Store the scanned and patched files in S3. Best effort."""
     try:
+        # Imported here so the CLI can use the pipeline without boto3.
+        from backend.app.services.storage import StorageService
+
         storage = StorageService()
         single = scan_input.single_path
         if single:

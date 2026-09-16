@@ -6,12 +6,13 @@ directory, and oversized or deeply compressed archives stop early.
 """
 
 import io
+import os
 import re
 import stat
 import tarfile
 import zipfile
 from dataclasses import dataclass, field
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 import httpx
 
@@ -254,4 +255,27 @@ def load_tarball(data: bytes, repo: RepoRef) -> SourceFiles:
 
     if prefix is not None and not collector.result.files:
         raise SourceError(f"No configuration files found in {repo.subpath}/.")
+    return collector.finish()
+
+
+def load_directory(root: str, label: str = None) -> SourceFiles:
+    """Collect configuration files under a local directory (used by the CLI)."""
+    base = Path(root).resolve()
+    if not base.is_dir():
+        raise SourceError(f"{root} is not a directory.")
+    collector = _Collector(label or base.name)
+    for current, dirs, files in os.walk(base):
+        # Prune in place so skipped folders (.git, node_modules) aren't walked.
+        dirs[:] = sorted(d for d in dirs if d not in SKIPPED_DIRS)
+        for name in sorted(files):
+            collector.visit()
+            path = Path(current, name)
+            if path.is_symlink() or not path.is_file():
+                continue
+
+            def read(limit, path=path):
+                with path.open("rb") as handle:
+                    return handle.read(limit)
+
+            collector.add(path.relative_to(base).as_posix(), path.stat().st_size, read)
     return collector.finish()

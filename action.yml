@@ -1,0 +1,130 @@
+name: CloudGuard infrastructure scan
+description: >
+  Run Checkov on Terraform, CloudFormation, Kubernetes, Compose and Dockerfiles,
+  optionally explain the findings with your own model API key, and report on the
+  pull request.
+branding:
+  icon: shield
+  color: gray-dark
+
+inputs:
+  path:
+    description: Directory to scan, relative to the repository root.
+    default: "."
+  fail-on:
+    description: Fail when a Checkov finding is at or above this severity (critical, high, medium, low, none).
+    default: high
+  provider:
+    description: Model provider for explanations (openai, anthropic, google, xai, groq, mistral). Leave empty for Checkov only.
+    default: ""
+  model:
+    description: Model id. Defaults to the provider's suggested model for the key.
+    default: ""
+  api-key:
+    description: API key for the provider. Pass it from a repository secret.
+    default: ""
+  changed-only:
+    description: On pull requests, only report findings in files the pull request changes.
+    default: "true"
+  comment:
+    description: Post the report as a pull request comment, updating it on later runs.
+    default: "true"
+  github-token:
+    description: Token used to comment. Needs pull-requests write permission.
+    default: ${{ github.token }}
+
+outputs:
+  exit-code:
+    description: 0 when nothing reached fail-on, 1 when something did, 2 when the scan failed.
+    value: ${{ steps.scan.outputs.exit-code }}
+  report:
+    description: Path to the Markdown report.
+    value: ${{ steps.scan.outputs.report }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install CloudGuard and Checkov
+      shell: bash
+      run: |
+        python -m venv "$RUNNER_TEMP/cloudguard"
+        "$RUNNER_TEMP/cloudguard/bin/pip" install --quiet -r "$GITHUB_ACTION_PATH/requirements-cli.txt"
+        python -m venv "$RUNNER_TEMP/checkov"
+        "$RUNNER_TEMP/checkov/bin/pip" install --quiet -r "$GITHUB_ACTION_PATH/requirements-checkov.txt"
+
+    - name: Scan
+      id: scan
+      shell: bash
+      env:
+        # Inputs are passed through the environment, never interpolated into
+        # the script, so their contents can't run as shell code.
+        CLOUDGUARD_LLM_KEY: ${{ inputs.api-key }}
+        CHECKOV_BIN: ${{ runner.temp }}/checkov/bin/checkov
+        PYTHONPATH: ${{ github.action_path }}
+        SCAN_PATH: ${{ inputs.path }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        PROVIDER: ${{ inputs.provider }}
+        MODEL: ${{ inputs.model }}
+        CHANGED_ONLY: ${{ inputs.changed-only }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      run: |
+        report="$RUNNER_TEMP/cloudguard-report.md"
+        link_path="${SCAN_PATH#./}"
+        [ "$link_path" = "." ] && link_path=""
+        link_base="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/$link_path"
+
+        args=(scan "$SCAN_PATH" --format markdown --output "$report" --fail-on "$FAIL_ON" --link-base "$link_base")
+        [ -n "$PROVIDER" ] && args+=(--provider "$PROVIDER")
+        [ -n "$MODEL" ] && args+=(--model "$MODEL")
+        if [ "$CHANGED_ONLY" = "true" ] && [ -n "$BASE_SHA" ]; then
+          git fetch --no-tags --quiet origin "$BASE_SHA" || true
+          args+=(--changed-since "$BASE_SHA")
+        fi
+
+        set +e
+        "$RUNNER_TEMP/cloudguard/bin/python" -m backend.cli "${args[@]}"
+        code=$?
+        set -e
+
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        echo "report=$report" >> "$GITHUB_OUTPUT"
+        if [ -f "$report" ]; then
+          cat "$report" >> "$GITHUB_STEP_SUMMARY"
+        fi
+        if [ "$code" = "2" ]; then
+          echo "::error::CloudGuard couldn't complete the scan"
+          exit 2
+        fi
+
+    - name: Comment on the pull request
+      if: inputs.comment == 'true' && github.event_name == 'pull_request' && steps.scan.outputs.exit-code != '2'
+      # Pull requests from forks get a read-only token; the job summary still has the report.
+      continue-on-error: true
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPORT: ${{ steps.scan.outputs.report }}
+      run: |
+        marker='<!-- cloudguard-report -->'
+        existing=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
+          --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -n 1)
+        body=$(jq -Rs '{body: .}' "$REPORT")
+        if [ -n "$existing" ]; then
+          echo "$body" | gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" --input - > /dev/null
+        else
+          echo "$body" | gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --input - > /dev/null
+        fi
+
+    - name: Check result
+      if: steps.scan.outputs.exit-code == '1'
+      shell: bash
+      env:
+        FAIL_ON: ${{ inputs.fail-on }}
+      run: |
+        echo "::error::CloudGuard found issues at or above '$FAIL_ON'. See the job summary."
+        exit 1

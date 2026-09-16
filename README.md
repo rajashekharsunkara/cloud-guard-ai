@@ -38,6 +38,61 @@ Dashboard is at `http://localhost:8000`. Swagger at `/docs`. Postgres and a Loca
 
 There are no accounts. Each browser gets a random `cg_workspace` cookie on its first request, and scans, search and the past fixes used as patch examples are all limited to that workspace, so visitors never see each other's data. Rows saved before workspaces existed have no workspace and aren't returned to anyone.
 
+## GitHub Action
+
+Scan infrastructure code on every pull request and get the report as a comment. The action runs in your own CI with your own secrets; nothing is sent to the CloudGuard site.
+
+```yaml
+name: CloudGuard
+on: pull_request
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # lets the scan compare against the pull request base
+
+      - uses: rajashekharsunkara/cloud-guard-ai@main
+        with:
+          path: infra
+          fail-on: high              # critical, high, medium, low or none
+          # Optional explanations and review findings with your own key:
+          provider: anthropic        # openai, anthropic, google, xai, groq, mistral
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+| Input | Default | |
+|-------|---------|--|
+| `path` | `.` | directory to scan |
+| `fail-on` | `high` | fail the job when a Checkov finding reaches this severity; review findings never fail it |
+| `provider`, `model`, `api-key` | empty | explanations with your own key; without them the report is Checkov only |
+| `changed-only` | `true` | on pull requests, only report files the pull request changes |
+| `comment` | `true` | create or update one comment on the pull request |
+
+The report also goes to the job summary, so pull requests from forks (which get a read-only token) still show it. This repository runs the action on itself in `.github/workflows/cloudguard.yml`.
+
+## Command line
+
+The same scan runs locally without the web app, database or S3:
+
+```bash
+pip install -r requirements-cli.txt
+python -m venv .checkov && .checkov/bin/pip install -r requirements-checkov.txt
+export CHECKOV_BIN=.checkov/bin/checkov
+
+python -m backend.cli scan infra/ --fail-on high
+CLOUDGUARD_LLM_KEY=sk-... python -m backend.cli scan infra/ --provider openai --format markdown --output report.md
+python -m backend.cli scan . --changed-since origin/main --write-patches patched/
+```
+
+The key is read from `CLOUDGUARD_LLM_KEY` so it stays out of shell history. Exit code 0 means nothing reached `--fail-on`, 1 means something did, 2 means the scan couldn't run. `--format` takes `text`, `markdown` or `json`.
+
 ## Configuration
 
 Everything is set through environment variables (see `.env.example`):

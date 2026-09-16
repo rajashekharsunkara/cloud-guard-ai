@@ -1,0 +1,28 @@
+name: CloudGuard
+
+# Runs this repository's own action on its infrastructure code.
+on:
+  pull_request:
+    paths:
+      - "terraform/**"
+      - "deploy/**"
+      - "Dockerfile"
+      - "docker-compose*.yml"
+      - "action.yml"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: ./
+        with:
+          path: .
+          fail-on: critical
