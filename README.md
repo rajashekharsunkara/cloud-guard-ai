@@ -1,181 +1,124 @@
 # CloudGuard
 
-Scans infrastructure code for security issues: a pasted file, a zip, or a public GitHub repository. [Checkov](https://www.checkov.io/) finds the problems and decides the score, so results are the same on every run; a language model then explains each finding, flags issues no policy covers, and writes patched files. A local embedding model (bge-small via fastembed) and pgvector retrieve earlier fixes as examples, and a vision-capable model compares architecture diagrams with the code.
+CloudGuard reviews infrastructure code for security problems before it's deployed. It reads Terraform, CloudFormation, Kubernetes, Helm, Docker Compose and Dockerfiles, runs them through [Checkov](https://www.checkov.io/)'s policy set, and shows every finding on the line it comes from. An explained scan adds what each finding puts at risk in that specific code, flags problems no policy covers, and writes a patched file to compare against the original.
 
-Checkov results are free and unlimited. Explained scans run on the server's Groq key (gpt-oss-120b), capped per visitor per day, or on the visitor's own OpenAI, Anthropic, Google, xAI, Groq or Mistral key with no cap. Visitor keys stay in the browser and are sent per request as `X-LLM-Provider`, `X-LLM-Model` and `X-LLM-Key` headers; the server never stores or logs them, and provider base URLs are fixed server-side.
+It runs as a web app, a command-line tool and a GitHub Action.
 
-**[Live demo](https://cloud-guard-ai.duckdns.org)** — running on AWS.
+**Live instance:** [cloud-guard-ai.duckdns.org](https://cloud-guard-ai.duckdns.org)
 
-## Running locally
+![Scan report: annotated Terraform with findings under each resource](docs/images/report.png)
 
-You'll need Docker (or Podman). A [Groq API key](https://console.groq.com/) enables free explained scans; without one, scans show Checkov results unless visitors add their own key.
+## What it does
+
+- **Scans a file, a zip or a public GitHub repository.** Configuration files are picked out of the upload and everything else is ignored.
+- **Scores deterministically.** The score comes only from Checkov findings, rated by severity per policy, so the same code always gets the same score.
+- **Explains findings in context.** A language model describes what each finding means for the resource in question and how to fix it, and lists issues that no policy covers (such as credentials in a Compose file) separately from the scored results.
+- **Writes patches.** Files with the most serious findings are rewritten with the fixes applied and shown as a diff.
+- **Learns from earlier fixes.** Findings are embedded with a local model and stored in PostgreSQL with pgvector; similar past fixes from the same user are passed to the model as examples.
+- **Checks architecture drift.** An uploaded diagram is compared with the Terraform that should implement it.
+- **Works with any major model provider.** A free tier runs on the server's Groq key with daily and per-minute limits; users can bring their own OpenAI, Anthropic, Google, xAI, Groq or Mistral key, which stays in their browser.
+- **Fits into pull requests.** The GitHub Action comments on each pull request with findings in the changed files and can fail the check at a chosen severity.
+
+## Quick start
+
+With Docker or Podman:
 
 ```bash
-cp .env.example .env
-# fill in GROQ_API_KEY for free explained scans (optional)
+git clone https://github.com/rajashekharsunkara/cloud-guard-ai.git
+cd cloud-guard-ai
+cp .env.example .env        # optionally set GROQ_API_KEY for free explained scans
 docker compose up --build
 ```
 
-Dashboard is at `http://localhost:8000`. Swagger at `/docs`. Postgres and a LocalStack S3 run alongside the backend; nothing leaves your machine except the LLM calls.
+Open `http://localhost:8000`. The interactive API reference is at `http://localhost:8000/docs`. PostgreSQL and LocalStack (for S3) start alongside the app, so nothing outside your machine is contacted except the model provider during explained scans.
 
-## API
+Without a Groq key, scans still run and show every Checkov finding; explanations and patches are available by adding a provider key in **Model settings**.
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/health` | DB + S3 status |
-| `GET` | `/api/usage` | Free explained scans left today for this client |
-| `GET` | `/api/llm/providers` | Providers usable with a visitor's own key |
-| `POST` | `/api/llm/models` | Check a key (`X-LLM-Key` header) and list the chat models it can use |
-| `POST` | `/api/audit` | Checkov scan, explained and patched when the free tier allows; JSON response |
-| `POST` | `/api/audit/stream` | Same pipeline, streamed as SSE |
-| `POST` | `/api/audit/archive` | Scan a zip upload (multipart field `archive`), streamed as SSE |
-| `POST` | `/api/audit/repo` | Scan a public GitHub repo or folder (`{"url": ...}`), streamed as SSE |
-| `POST` | `/api/audit/diagram` | Audit + architecture diagram drift check; needs the own-key headers |
-| `POST` | `/api/search` | Semantic search over your past findings |
-| `GET` | `/api/history` | Your recent scans |
-| `GET` | `/api/history/{audit_id}` | One scan with findings, original and patched file |
-| `DELETE` | `/api/history` | Delete your scans and findings |
+To scan from a terminal instead:
 
-There are no accounts. Each browser gets a random `cg_workspace` cookie on its first request, and scans, search and the past fixes used as patch examples are all limited to that workspace, so visitors never see each other's data. Rows saved before workspaces existed have no workspace and aren't returned to anyone.
+```bash
+pip install -r requirements-cli.txt
+python -m venv .checkov && .checkov/bin/pip install -r requirements-checkov.txt
+CHECKOV_BIN=.checkov/bin/checkov python -m backend.cli scan path/to/infra --fail-on high
+```
 
 ## GitHub Action
 
-Scan infrastructure code on every pull request and get the report as a comment. The action runs in your own CI with your own secrets; nothing is sent to the CloudGuard site.
-
 ```yaml
-name: CloudGuard
+# .github/workflows/cloudguard.yml
 on: pull_request
-
 permissions:
   contents: read
   pull-requests: write
-
 jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # lets the scan compare against the pull request base
-
+          fetch-depth: 0
       - uses: rajashekharsunkara/cloud-guard-ai@main
         with:
           path: infra
-          fail-on: high              # critical, high, medium, low or none
-          # Optional explanations and review findings with your own key:
-          provider: anthropic        # openai, anthropic, google, xai, groq, mistral
-          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          fail-on: high
+          # Optional explanations with your own key:
+          # provider: anthropic
+          # api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-| Input | Default | |
-|-------|---------|--|
-| `path` | `.` | directory to scan |
-| `fail-on` | `high` | fail the job when a Checkov finding reaches this severity; review findings never fail it |
-| `provider`, `model`, `api-key` | empty | explanations with your own key; without them the report is Checkov only |
-| `changed-only` | `true` | on pull requests, only report files the pull request changes |
-| `comment` | `true` | create or update one comment on the pull request |
+Each pull request gets one comment, updated on every push, listing findings in the files it changes. The check fails only on Checkov findings at or above `fail-on`, so the result doesn't depend on a model. Inputs, outputs and CI examples for other systems are in [GitHub Action and CLI](docs/github-action-and-cli.md).
 
-The report also goes to the job summary, so pull requests from forks (which get a read-only token) still show it. This repository runs the action on itself in `.github/workflows/cloudguard.yml`.
+## How it's built
 
-## Command line
+- **Static analysis decides, the model explains.** Scores and pass/fail come only from Checkov, rated by a fixed severity table. Model output is shown separately, never scored, and every model failure falls back to the complete Checkov report with a specific reason and next step.
+- **One provider interface over six APIs.** The official OpenAI, Anthropic and Google SDKs cover all six providers, with structured JSON output, image input, live model lists and a shared classification of auth, rate-limit, daily-limit and size errors.
+- **A shared free tier that stays usable.** Per-IP rate limits, a daily quota enforced atomically in PostgreSQL, a cap on concurrent scans, token budgets sized to the provider's per-minute allowance, and shared back-off when the provider reports a limit.
+- **Untrusted input handled as untrusted.** Archives are read in memory with size, count and path checks; repository downloads can only reach GitHub; Checkov runs in a subprocess with an empty environment and a timeout; visitors' API keys are used per request and never stored or logged.
+- **Private without accounts.** Each browser gets an anonymous workspace, and history, search and the earlier fixes given to the model are all scoped to it.
+- **Cheap to run.** One 2 GB ARM instance with Docker Compose and Caddy, local embeddings instead of a paid API, and daily database backups to S3.
 
-The same scan runs locally without the web app, database or S3:
+The reasoning behind each of these is in [Architecture](docs/architecture.md) and [Security](docs/security.md).
 
-```bash
-pip install -r requirements-cli.txt
-python -m venv .checkov && .checkov/bin/pip install -r requirements-checkov.txt
-export CHECKOV_BIN=.checkov/bin/checkov
+## Documentation
 
-python -m backend.cli scan infra/ --fail-on high
-CLOUDGUARD_LLM_KEY=sk-... python -m backend.cli scan infra/ --provider openai --format markdown --output report.md
-python -m backend.cli scan . --changed-since origin/main --write-patches patched/
+| Guide | Covers |
+|-------|--------|
+| [Architecture](docs/architecture.md) | Components, the scan pipeline, data model, and the reasoning behind the main design choices |
+| [API reference](docs/api.md) | Endpoints, request and response formats, the streaming event format, limits and errors |
+| [GitHub Action and CLI](docs/github-action-and-cli.md) | Pull request scanning, command-line options, output formats and exit codes |
+| [Configuration](docs/configuration.md) | Every environment variable and the model budget settings |
+| [Deployment](docs/deployment.md) | Running on AWS (EC2 with Docker Compose, RDS, ECS), TLS, IAM, backups, upgrades and operations |
+| [Security](docs/security.md) | Threat model and the controls around uploads, keys, the scanner and user data |
+| [Development](docs/development.md) | Project layout, local setup, tests, CI, and extending severities or providers |
+
+## Stack
+
+| Layer | Technology |
+|-------|------------|
+| API | Python 3.12, FastAPI, Uvicorn, Pydantic |
+| Static analysis | Checkov 3.3, run as an isolated subprocess |
+| Language models | OpenAI, Anthropic and Google GenAI SDKs (the OpenAI SDK also serves xAI, Groq and Mistral) |
+| Embeddings | BAAI bge-small-en-v1.5 via fastembed and ONNX Runtime, on the server |
+| Storage | PostgreSQL 16 with pgvector, S3 |
+| Frontend | HTML, CSS and ES modules with no build step |
+| Delivery | Docker, Docker Compose, GitHub Actions, AWS EC2 behind Caddy |
+
+## Project layout
+
 ```
-
-The key is read from `CLOUDGUARD_LLM_KEY` so it stays out of shell history. Exit code 0 means nothing reached `--fail-on`, 1 means something did, 2 means the scan couldn't run. `--format` takes `text`, `markdown` or `json`.
-
-## Configuration
-
-Everything is set through environment variables (see `.env.example`):
-
-| Variable | Default | Notes |
-|----------|---------|-------|
-| `GROQ_API_KEY` | — | explained scans and patches; without it scans are Checkov only |
-| `DATABASE_URL` | local Postgres | any Postgres 15+ with the pgvector extension |
-| `AWS_ENDPOINT_URL` | unset | set to a LocalStack URL for dev; leave unset for real AWS |
-| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | unset | leave empty on AWS to use the IAM role |
-| `AWS_DEFAULT_REGION` | `us-east-1` | |
-| `S3_BUCKET_NAME` | `cloudguard-artifacts` | must be globally unique on real AWS |
-| `APP_ENV` | `development` | set `production` to reduce log noise and hide error details |
-| `CORS_ORIGINS` | `*` | comma-separated; lock down in production |
-| `SCAN_RATE_LIMIT` | `8` | scans per client IP per 10 minutes |
-| `SEARCH_RATE_LIMIT` | `30` | searches per client IP per minute |
-| `MAX_CONCURRENT_SCANS` | `2` | scans running at once; others wait up to 30s, then get a 503 |
-| `FORWARDED_ALLOW_IPS` | `127.0.0.1` | proxies trusted to set `X-Forwarded-For`; the prod compose file trusts the Docker bridge |
-| `BACKUP_INTERVAL_SECONDS` | `86400` | prod compose only; how often the database is dumped to S3 |
-| `FREE_LLM_SCANS_PER_DAY` | `5` | explained scans per client IP per UTC day; `0` for Checkov only |
-| `USAGE_HASH_SALT` | derived from `DATABASE_URL` | key for hashing client IPs in the usage table |
-| `CHECKOV_BIN` | `checkov` | set by the Docker image; point at a checkov install for local runs |
-| `CHECKOV_TIMEOUT` | `90` | seconds before a scan is stopped |
-| `LLM_REVIEW_MAX_CHARS` | `16000` | file content sent for explanations; files with worse findings go first |
-| `LLM_MAX_EXPLAINED_FINDINGS` | `25` | findings explained per scan |
-| `LLM_MAX_PATCHED_FILES` | `3` | files patched per scan |
-| `LLM_PATCH_MAX_FILE_CHARS` | `12000` | larger files aren't rewritten |
-| `LLM_PATCH_CONCURRENCY` | `1` | patch requests in parallel |
-| `EMBEDDING_CACHE_DIR` | set by the image | where the local embedding model lives |
-
-The `LLM_*` defaults fit Groq's free tier, which allows 8,000 tokens per minute for gpt-oss-120b across all visitors. On that tier an explained scan of a large project takes a few minutes, and concurrent explained scans will hit the limit; the app then falls back to Checkov results and says so. A paid Groq tier lifts the limit, after which these values can be raised.
-
-## Deploying to AWS
-
-The simplest setup is a single EC2 instance with Docker, using RDS-style managed Postgres or the bundled Postgres container, and a real S3 bucket.
-
-1. **Instance**: t3.small or larger, Amazon Linux 2023 or Ubuntu, Docker + the compose plugin installed. Open ports 80/443 (behind a load balancer or reverse proxy) — don't expose 5432.
-2. **IAM role**: attach an instance profile allowing `s3:CreateBucket`, `s3:HeadBucket`, `s3:PutObject`, `s3:GetObject`, `s3:ListBucket` on your artifacts bucket. Then no AWS keys go in `.env` at all. Containers reach the role through instance metadata, so the instance's metadata hop limit must be at least 2 (`aws ec2 modify-instance-metadata-options --http-put-response-hop-limit 2`).
-3. **Environment**: copy `.env.example` to `.env` on the host and set:
-
-   ```bash
-   APP_ENV=production
-   GROQ_API_KEY=...           # real keys
-   POSTGRES_PASSWORD=...      # generate a strong one
-   AWS_ENDPOINT_URL=          # empty: use real AWS
-   AWS_ACCESS_KEY_ID=         # empty: use the IAM role
-   AWS_SECRET_ACCESS_KEY=
-   AWS_DEFAULT_REGION=us-east-1
-   S3_BUCKET_NAME=your-unique-bucket-name
-   CORS_ORIGINS=https://your-domain.example
-   ```
-
-4. **Run it**:
-
-   ```bash
-   docker compose -f docker-compose.prod.yml up --build -d
-   ```
-
-   The backend listens on `127.0.0.1:8000` only, so run the TLS proxy on the same host. With Caddy the whole config is:
-
-   ```
-   your-domain.example {
-       reverse_proxy localhost:8000
-   }
-   ```
-
-   `/api/health` works as a health check.
-
-5. **Backups**: the `backup` service dumps the database to `s3://<bucket>/backups/` when it starts and then once a day. Check it with `docker compose -f docker-compose.prod.yml logs backup`. Add an S3 lifecycle rule on the `backups/` prefix (for example, expire after 30 days) so old dumps don't pile up.
-
-   To restore, stop the backend, then load a dump into the database:
-
-   ```bash
-   docker compose -f docker-compose.prod.yml stop backend
-   aws s3 cp s3://<bucket>/backups/cloudguard-<timestamp>.dump restore.dump
-   docker compose -f docker-compose.prod.yml exec -T postgres \
-     pg_restore --clean --if-exists --no-owner -U cloudguard -d cloudguard_db < restore.dump
-   docker compose -f docker-compose.prod.yml start backend
-   ```
-
-To use a managed database instead of the Postgres container, point `DATABASE_URL` at an RDS Postgres instance with the `vector` extension available (RDS supports pgvector on Postgres 15.2+) and drop the `postgres` service from the compose file.
-
-ECS/Fargate works the same way: build the image from the `Dockerfile`, pass the environment above as task definition secrets, and give the task role the S3 permissions. Rate limits are kept in memory per process, so behind a load balancer with several tasks each task counts separately.
+backend/
+  app/
+    core/        configuration, database, rate limiting, per-browser workspaces
+    routers/     HTTP API
+    services/    scan pipeline, Checkov runner, model providers, sources, storage
+    prompts/     review, patch and diagram prompts
+  cli.py         command-line scanner
+  tests/         unit and integration tests
+frontend/        web interface
+deploy/backup/   database backup container
+docs/            guides
+action.yml       GitHub Action
+```
 
 ## Tests
 
@@ -183,13 +126,11 @@ ECS/Fargate works the same way: build the image from the `Dockerfile`, pass the 
 pip install -r requirements.txt -r requirements-dev.txt
 python -m venv .checkov && .checkov/bin/pip install -r requirements-checkov.txt
 docker compose up -d postgres localstack
-CHECKOV_BIN=.checkov/bin/checkov pytest backend/tests/ -v
+CHECKOV_BIN=.checkov/bin/checkov pytest backend/tests
 ```
 
-Checkov lives in its own virtualenv because its dependency tree is large and pinned separately (`requirements-checkov.txt`). Without `CHECKOV_BIN` the tests that run the real scanner are skipped; everything else uses recorded Checkov output from `backend/tests/fixtures`.
-
-The suite covers severity ratings and scoring, Checkov output parsing and sandboxing, the scan pipeline in each mode (mocked LLMs), rate limits, the daily free-scan quota under concurrency, S3 round-trips against LocalStack, pgvector search, and a full audit → search → history flow.
+CI runs flake8, black and the full test suite against PostgreSQL and LocalStack service containers, then builds the image. See [Development](docs/development.md) for what the suite covers.
 
 ## License
 
-MIT
+[MIT](LICENSE)
