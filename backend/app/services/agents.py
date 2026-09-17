@@ -1,7 +1,8 @@
-import json
 import logging
+import re
 from functools import lru_cache
 from pathlib import Path
+from typing import Optional
 
 from backend.app.services import embeddings, llm
 from backend.app.services.llm import LlmChoice
@@ -139,26 +140,113 @@ def _format_files(files: dict[str, str]) -> str:
     )
 
 
-def _clean_additional(items, paths) -> list[dict]:
+def _clean_additional(items, files: dict[str, str]) -> list[dict]:
     cleaned = []
     for item in items if isinstance(items, list) else []:
         if not isinstance(item, dict) or not item.get("title"):
             continue
         severity = str(item.get("severity", "MEDIUM")).upper()
         file_path = str(item.get("file", ""))
-        cleaned.append(
-            {
-                "source": "review",
-                "check_id": None,
-                "severity": severity if severity in SEVERITY_ORDER else "MEDIUM",
-                "title": str(item["title"]),
-                "description": str(item.get("description", "")),
-                "remediation": str(item.get("remediation", "")),
-                "resource": str(item.get("resource", "")),
-                "file": file_path if file_path in paths else "",
-            }
-        )
+        if not file_path and len(files) == 1:
+            file_path = next(iter(files))
+        elif file_path not in files:
+            file_path = ""
+        finding = {
+            "source": "review",
+            "check_id": None,
+            "severity": severity if severity in SEVERITY_ORDER else "MEDIUM",
+            "title": str(item["title"]),
+            "description": str(item.get("description", "")),
+            "remediation": str(item.get("remediation", "")),
+            "resource": str(item.get("resource", "")),
+            "file": file_path,
+        }
+        lines = locate_resource(files.get(file_path, ""), finding["resource"])
+        if lines:
+            finding["line_start"], finding["line_end"] = lines
+        cleaned.append(finding)
     return cleaned
+
+
+def locate_resource(content: str, resource: str) -> Optional[tuple[int, int]]:
+    """The lines of a resource the review named, found in the file itself.
+
+    The model names resources the way the file does (a Terraform address, a
+    Compose service, a Kubernetes object name), which is more reliable than
+    asking it for line numbers. Returns None when the name can't be found.
+    """
+    name = resource.strip().strip("`'\"")
+    if not content or not name:
+        return None
+    lines = content.splitlines()
+    # Names sometimes come with a description ("Deployment ledger-api",
+    # "compose service api"), so the words are tried last to first.
+    words = [w.strip("`'\",:()") for w in reversed(name.split())]
+    candidates = [name] + [w for w in words if len(w) >= 3 and w != name]
+    for candidate in candidates:
+        for find in (_terraform_block, _yaml_key_block, _kubernetes_object):
+            found = find(lines, candidate)
+            if found:
+                return found
+    return None
+
+
+def _terraform_block(lines: list[str], name: str) -> Optional[tuple[int, int]]:
+    parts = name.split(".")
+    if len(parts) < 2:
+        return None
+    if parts[0] == "module":
+        pattern = rf'^\s*module\s+"{re.escape(parts[1])}"'
+    else:
+        kind = "data" if parts[0] == "data" and len(parts) >= 3 else "resource"
+        type_, label = parts[-2], parts[-1]
+        pattern = rf'^\s*{kind}\s+"{re.escape(type_)}"\s+"{re.escape(label)}"'
+    start = _first_match(lines, pattern)
+    if start is None:
+        return None
+    depth, opened = 0, False
+    for i in range(start, len(lines)):
+        opened = opened or "{" in lines[i]
+        depth += lines[i].count("{") - lines[i].count("}")
+        if opened and depth <= 0:
+            return start + 1, i + 1
+    return start + 1, start + 1
+
+
+def _yaml_key_block(lines: list[str], name: str) -> Optional[tuple[int, int]]:
+    key = name.split(".")[-1]
+    start = _first_match(lines, rf"^(\s*){re.escape(key)}\s*:\s*(#.*)?$")
+    if start is None:
+        return None
+    indent = len(lines[start]) - len(lines[start].lstrip())
+    end = start
+    for i in range(start + 1, len(lines)):
+        text = lines[i]
+        if not text.strip() or text.lstrip().startswith("#"):
+            continue
+        if len(text) - len(text.lstrip()) <= indent:
+            break
+        end = i
+    return start + 1, end + 1
+
+
+def _kubernetes_object(lines: list[str], name: str) -> Optional[tuple[int, int]]:
+    key = name.split("/")[-1].split(".")[-1]
+    at = _first_match(lines, rf"^\s*name:\s*[\"']?{re.escape(key)}[\"']?\s*$")
+    if at is None:
+        return None
+    start = at
+    while start > 0 and not lines[start - 1].startswith("---"):
+        start -= 1
+    end = next(
+        (i for i in range(at, len(lines)) if lines[i].startswith("---")), len(lines)
+    )
+    return start + 1, max(end, start + 1)
+
+
+def _first_match(lines: list[str], pattern: str) -> Optional[int]:
+    compiled = re.compile(pattern)
+    return next((i for i, line in enumerate(lines) if compiled.match(line)), None)
 
 
 async def review_findings(
@@ -194,7 +282,7 @@ async def review_findings(
             explained[ref - 1]["description"] = str(item.get("description", ""))
             explained[ref - 1]["remediation"] = str(item.get("remediation", ""))
 
-    additional = _clean_additional(parsed.get("additional"), set(files))
+    additional = _clean_additional(parsed.get("additional"), files)
     logger.info(
         "review explained %d of %d findings, added %d",
         sum(1 for f in explained if f["description"]),
@@ -204,27 +292,73 @@ async def review_findings(
     return explained, additional
 
 
+def format_patch_findings(findings: list[dict], max_chars: int) -> str:
+    """One line per finding, most severe first, within ``max_chars``.
+
+    The patch only needs what to fix, so explanations are shortened and the
+    least severe findings are dropped first when the list is long.
+    """
+    ranked = sorted(findings, key=lambda f: SEVERITY_ORDER.get(f.get("severity"), 4))
+    lines, used = [], 0
+    for f in ranked:
+        what = f.get("check_id") or "review"
+        where = f" ({f['resource']})" if f.get("resource") else ""
+        line = f"- [{f.get('severity', 'MEDIUM')}] {what}: {f.get('title', '')}{where}"
+        fix = f.get("remediation") or f.get("description") or ""
+        if fix:
+            line += f" Fix: {_shorten(fix, 300)}"
+        if lines and used + len(line) > max_chars:
+            lines.append(f"- ...and {len(ranked) - len(lines)} lower-severity findings")
+            break
+        lines.append(line)
+        used += len(line) + 1
+    return "\n".join(lines) or "(none)"
+
+
+def format_earlier_fixes(similar_patches: list[dict], max_chars: int) -> str:
+    """Earlier fixes as short examples: the issue and the lines that changed.
+
+    Stored patches are whole files, often the same file for several findings,
+    so they're de-duplicated and reduced to their "FIXED:" lines.
+    """
+    blocks, seen, used = [], set(), 0
+    for p in similar_patches:
+        patched = p.get("patched_code") or ""
+        changed = [line.strip() for line in patched.splitlines() if "FIXED:" in line]
+        if not changed or patched in seen:
+            continue
+        seen.add(patched)
+        block = f"Issue: {_shorten(p.get('description') or '', 200)}\nChanged lines:\n"
+        for line in changed:
+            if used + len(block) + len(line) > max_chars:
+                break
+            block += line + "\n"
+        if block.endswith("Changed lines:\n"):
+            break
+        blocks.append(block.rstrip())
+        used += len(block)
+    return "\n\n".join(blocks) or "No earlier fixes."
+
+
+def _shorten(text: str, limit: int) -> str:
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[: limit - 3].rstrip() + "..."
+
+
 async def run_patch_generation(
     choice: LlmChoice,
     iac_content: str,
     vulnerabilities: list[dict],
     similar_patches: list[dict],
     file_name: str = "main.tf",
+    findings_chars: int = 3_000,
+    examples_chars: int = 1_500,
 ) -> str:
-    patches_context = "No earlier fixes."
-    if similar_patches:
-        patches_context = "\n\n".join(
-            f"--- Earlier fix (similarity: {p.get('similarity_score', 'N/A')}) ---\n"
-            f"Issue: {p.get('description', 'N/A')}\n"
-            f"Patch:\n{p.get('patched_code', 'N/A')}"
-            for p in similar_patches
-        )
-
     prompt = _load_prompt("patch_generator.txt").format(
         file_name=file_name,
         iac_content=iac_content,
-        vulnerabilities=json.dumps(vulnerabilities, indent=2),
-        similar_patches=patches_context,
+        vulnerabilities=format_patch_findings(vulnerabilities, findings_chars),
+        similar_patches=format_earlier_fixes(similar_patches, examples_chars),
     )
     content = await llm.complete(choice, PATCH_SYSTEM, prompt)
     return _strip_code_fence(content)

@@ -69,6 +69,11 @@ class Settings(BaseSettings):
     llm_patch_max_file_chars: int = Field(default=8_000)
     llm_max_patched_files: int = Field(default=3)
     llm_patch_concurrency: int = Field(default=1)
+    # Findings and earlier fixes sent with each patch request. Earlier fixes
+    # are whole patched files in storage, so they're cut down to the changed
+    # lines and capped; without a cap they can push a small file over the limit.
+    llm_patch_findings_chars: int = Field(default=3_000)
+    llm_patch_examples_chars: int = Field(default=1_500)
 
     # Local embedding model files; the Docker image bakes them in here.
     embedding_cache_dir: str = Field(default="")

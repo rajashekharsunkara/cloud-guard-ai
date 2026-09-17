@@ -104,14 +104,20 @@ class TestReviewFindings:
                 ],
             }
         )
+        compose = (
+            "services:\n  web:\n    image: app\n    environment:\n      PASSWORD: x\n"
+        )
         _, additional = await review_findings(
-            CHOICE, {"docker-compose.yml": "code"}, [], 25
+            CHOICE, {"docker-compose.yml": compose}, [], 25
         )
         assert [(a["title"], a["severity"], a["file"]) for a in additional] == [
             ("Password in env", "HIGH", "docker-compose.yml"),
             ("Made-up file", "LOW", ""),
-            ("Odd severity", "MEDIUM", ""),
+            # No file named, but only one was reviewed.
+            ("Odd severity", "MEDIUM", "docker-compose.yml"),
         ]
+        assert (additional[0]["line_start"], additional[0]["line_end"]) == (2, 5)
+        assert "line_start" not in additional[1]
         assert all(
             a["source"] == "review" and a["check_id"] is None for a in additional
         )
@@ -248,3 +254,128 @@ class TestIndexFindings:
             db, "ws", "a1", "main.tf", {"main.tf": "c"}, {}, [finding("A", "LOW")]
         )
         db.save_vulnerabilities.assert_not_called()
+
+
+class TestLocateResource:
+
+    TERRAFORM = """provider "aws" {}
+
+resource "aws_s3_bucket" "logs" {
+  bucket = "x"
+  tags = {
+    Team = "a"
+  }
+}
+
+data "aws_iam_policy_document" "read" {
+  statement {}
+}
+
+module "vpc" {
+  source = "./vpc"
+}
+"""
+
+    COMPOSE = """services:
+  web:
+    image: app
+    ports:
+      - "80:80"
+
+  worker:
+    image: worker
+    privileged: true
+volumes:
+  data:
+"""
+
+    KUBERNETES = """apiVersion: v1
+kind: Service
+metadata:
+  name: web
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  replicas: 2
+"""
+
+    @pytest.mark.parametrize(
+        "content, resource, expected",
+        [
+            (TERRAFORM, "aws_s3_bucket.logs", (3, 8)),
+            (TERRAFORM, "data.aws_iam_policy_document.read", (10, 12)),
+            (TERRAFORM, "module.vpc", (14, 16)),
+            (COMPOSE, "worker", (7, 9)),
+            (COMPOSE, "services.web", (2, 5)),
+            (KUBERNETES, "api", (6, 11)),
+            (KUBERNETES, "Deployment/api", (6, 11)),
+            (KUBERNETES, "kubernetes Deployment api", (6, 11)),
+            (COMPOSE, "docker-compose service worker", (7, 9)),
+        ],
+    )
+    def test_finds_the_named_resource(self, content, resource, expected):
+        from backend.app.services.agents import locate_resource
+
+        assert locate_resource(content, resource) == expected
+
+    @pytest.mark.parametrize("resource", ["", "aws_s3_bucket.missing", "nothing here"])
+    def test_unknown_names_are_not_placed(self, resource):
+        from backend.app.services.agents import locate_resource
+
+        assert locate_resource(self.TERRAFORM, resource) is None
+
+
+class TestPatchPrompt:
+
+    def test_findings_are_capped_most_severe_first(self):
+        from backend.app.services.agents import format_patch_findings
+
+        findings = [
+            {"severity": "LOW", "check_id": "CKV_LOW", "title": "low " * 20},
+            {
+                "severity": "CRITICAL",
+                "check_id": "CKV_CRIT",
+                "title": "Public bucket",
+                "remediation": "Set acl to private",
+            },
+        ] + [
+            {"severity": "MEDIUM", "check_id": f"CKV_M{i}", "title": "medium " * 10}
+            for i in range(20)
+        ]
+        text = format_patch_findings(findings, max_chars=400)
+        assert text.splitlines()[0].startswith("- [CRITICAL] CKV_CRIT: Public bucket")
+        assert "Fix: Set acl to private" in text
+        assert "CKV_LOW" not in text
+        assert text.splitlines()[-1].startswith("- ...and ")
+        assert len(text) < 600
+
+    def test_earlier_fixes_are_reduced_to_changed_lines(self):
+        from backend.app.services.agents import format_earlier_fixes
+
+        patched = "\n".join(
+            ['resource "x" "y" {']
+            + ["  unchanged = true"] * 2000
+            + ['  acl = "private" # FIXED: no public ACL', "}"]
+        )
+        similar = [
+            {"description": "Public ACL", "patched_code": patched},
+            {"description": "Same file again", "patched_code": patched},
+            {"description": "No marked lines", "patched_code": "a = 1"},
+        ]
+        text = format_earlier_fixes(similar, max_chars=1500)
+        assert 'acl = "private" # FIXED: no public ACL' in text
+        assert "unchanged" not in text
+        assert text.count("Issue:") == 1
+        assert len(text) < 300
+
+    def test_no_usable_fixes(self):
+        from backend.app.services.agents import format_earlier_fixes
+
+        assert format_earlier_fixes([], 1500) == "No earlier fixes."
+        assert (
+            format_earlier_fixes([{"patched_code": "x = 1"}], 1500)
+            == "No earlier fixes."
+        )

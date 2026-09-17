@@ -190,7 +190,7 @@ async def test_uncovered_file_has_no_score(
     )
     assert result["security_score"] is None
     assert result["vulnerabilities"][0]["title"] == "Privileged container"
-    assert "doesn't support this file type" in result["analysis"]["notices"][-1]
+    assert "only checks this file type" in result["analysis"]["notices"][-1]
 
 
 @pytest.mark.asyncio
@@ -330,7 +330,7 @@ async def test_multi_file_scan(
     mock_review.return_value = (findings, [])
     mock_similar.return_value = []
 
-    async def fake_patch(choice, content, context, similar, file_name):
+    async def fake_patch(choice, content, context, similar, file_name, **budget):
         if file_name == "c.tf":
             raise RuntimeError("provider hiccup")
         return f"patched {file_name}"

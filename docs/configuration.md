@@ -62,7 +62,7 @@ The free tier uses Groq's `openai/gpt-oss-120b`.
 
 ## Model budgets
 
-These apply to free-tier scans. Scans with a visitor's own key use fixed, larger budgets (120,000 characters of review context, 60 explained findings, 5 patched files up to 60,000 characters each, 3 patches at a time).
+These apply to free-tier scans. Scans with a visitor's own key use fixed, larger budgets (120,000 characters of review context, 60 explained findings, 5 patched files up to 60,000 characters each, 3 patches at a time, 40,000 characters of findings and 12,000 of earlier fixes per patch).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -71,6 +71,8 @@ These apply to free-tier scans. Scans with a visitor's own key use fixed, larger
 | `LLM_PATCH_MAX_FILE_CHARS` | `8000` | Largest file that gets a patch |
 | `LLM_MAX_PATCHED_FILES` | `3` | Files patched per scan |
 | `LLM_PATCH_CONCURRENCY` | `1` | Patch requests sent at once |
+| `LLM_PATCH_FINDINGS_CHARS` | `3000` | Characters of findings sent with each patch request, most severe first |
+| `LLM_PATCH_EXAMPLES_CHARS` | `1500` | Characters of earlier fixes sent as examples with each patch request. Earlier patches are reduced to their changed lines first |
 
 The defaults fit Groq's free allowance of 8,000 tokens per minute for this model. Terraform runs at about 2.5 characters per token, so 9,000 characters of source plus the findings list and instructions stays under the per-request ceiling. On a paid Groq tier, raising all of these gives fuller explanations for larger projects:
 
@@ -80,6 +82,8 @@ LLM_MAX_EXPLAINED_FINDINGS=40
 LLM_PATCH_MAX_FILE_CHARS=30000
 LLM_MAX_PATCHED_FILES=5
 LLM_PATCH_CONCURRENCY=2
+LLM_PATCH_FINDINGS_CHARS=10000
+LLM_PATCH_EXAMPLES_CHARS=5000
 ```
 
 ## Embeddings

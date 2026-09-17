@@ -136,6 +136,8 @@ class Budget:
     patched_files: int
     patch_file_chars: int
     patch_concurrency: int
+    patch_findings_chars: int = 3_000
+    patch_examples_chars: int = 1_500
 
     @classmethod
     def free(cls) -> "Budget":
@@ -145,13 +147,15 @@ class Budget:
             settings.llm_max_patched_files,
             settings.llm_patch_max_file_chars,
             settings.llm_patch_concurrency,
+            settings.llm_patch_findings_chars,
+            settings.llm_patch_examples_chars,
         )
 
     @classmethod
     def own_key(cls) -> "Budget":
         # A visitor's own key has its own rate limits, so the scan can send
         # much more. These still keep one scan to a few minutes.
-        return cls(120_000, 60, 5, 60_000, 3)
+        return cls(120_000, 60, 5, 60_000, 3, 40_000, 12_000)
 
 
 def model_failure_notice(error: Exception, choice: llm.LlmChoice) -> str:
@@ -483,6 +487,8 @@ class Scan:
                         context,
                         self.similar,
                         file_name=path,
+                        findings_chars=self.budget.patch_findings_chars,
+                        examples_chars=self.budget.patch_examples_chars,
                     )
                 except Exception as error:
                     self._log_model_failure(f"patch of {path}", error)
@@ -530,14 +536,14 @@ class Scan:
 
     def _coverage_notice(self) -> str:
         notice = (
-            "Checkov doesn't support this file type (Docker Compose, for example), "
-            "so there's no score."
+            "Checkov only checks this file type (Docker Compose, for example) "
+            "for secrets, so there's no score."
             if self.input.single_path
-            else "None of these files are types Checkov supports, so there's no score."
+            else "Checkov only checks these file types for secrets, so there's no score."
         )
-        if self.mode == "free":
-            return notice + " The findings come from the review alone."
-        return notice + " An explained scan is needed to review it."
+        if self.mode != "static":
+            return notice + " Anything else comes from the review."
+        return notice + " An explained scan can review the rest."
 
     def _score(self):
         if not self.covered_files:

@@ -42,7 +42,8 @@ class Report {
     this.view = "code";
     this.activeId = null;
     this.open = new Set();
-    const first = this.order[0];
+    this.folder = commonFolder(this.files);
+    const first = this.leadIn(this.file);
     if (first && this.explained()) this.open.add(first._id);
     this.activeId = first ? first._id : null;
 
@@ -89,6 +90,15 @@ class Report {
       .sort((a, b) => a.line_start - b.line_start || severityRank(a) - severityRank(b));
   }
 
+  // The finding to show first in a file: the most serious one, preferring
+  // one that was explained, rather than whatever happens to come first.
+  leadIn(file) {
+    const ranked = this.findingsIn(file).slice().sort((a, b) =>
+      severityRank(a) - severityRank(b) || (b.description ? 1 : 0) - (a.description ? 1 : 0)
+        || a.line_start - b.line_start);
+    return ranked[0] || null;
+  }
+
   explained() {
     return this.analysis.mode && this.analysis.mode !== "static";
   }
@@ -111,8 +121,10 @@ class Report {
     const checks = this.findings.filter((f) => f.source === "checkov").length;
     const review = this.findings.length - checks;
     if (this.result.security_score === null || this.result.security_score === undefined) {
-      const found = this.findings.length ? `${plural(this.findings.length, "finding")} from the review. ` : "";
-      return `${found}Checkov doesn't cover these file types, so there's no score.`;
+      const found = [];
+      if (checks) found.push(`${plural(checks, "secret")} found by Checkov`);
+      if (review) found.push(`${plural(review, "finding")} from the review`);
+      return `${found.length ? `${found.join(" and ")}.` : "No findings."} There's no score for these file types.`;
     }
     if (!this.findings.length) return "Every Checkov policy that applies passed.";
     const counts = countBySeverity(this.findings);
@@ -201,8 +213,12 @@ class Report {
     const rail = this.files.map((file) => {
       const counts = countBySeverity(this.findingsIn(file));
       const badges = SEVERITIES.filter((s) => counts[s]).map((s) => `<span class="sev-${s}">${counts[s]}</span>`).join("");
+      const relative = file.slice(this.folder.length);
+      const cut = relative.lastIndexOf("/");
+      const name = relative.slice(cut + 1);
+      const dir = cut >= 0 ? relative.slice(0, cut + 1) : "";
       return `<li><button class="rail-file" type="button" data-file="${escapeHtml(file)}" aria-current="${file === this.file}">
-        <span class="rail-path" title="${escapeHtml(file)}">${escapeHtml(file)}</span>
+        <span class="rail-path" title="${escapeHtml(file)}"><span class="rail-name">${escapeHtml(name)}</span>${dir ? `<span class="rail-dir">${escapeHtml(dir)}</span>` : ""}</span>
         <span class="rail-counts">${badges || `<span class="sev-low">patch</span>`}</span>
       </button></li>`;
     }).join("");
@@ -210,6 +226,7 @@ class Report {
       <div class="review">
         <nav class="rail" aria-label="Files with findings">
           <span class="eyebrow">${plural(this.files.length, "file")}</span>
+          ${this.folder ? `<span class="rail-root" title="${escapeHtml(this.folder)}">in ${escapeHtml(this.folder)}</span>` : ""}
           <ul class="rail-list">${rail}</ul>
           <p class="rail-note">Step through findings with <kbd>j</kbd> and <kbd>k</kbd>.</p>
         </nav>
@@ -453,7 +470,7 @@ class Report {
       if (d.file !== undefined) {
         this.file = d.file;
         this.view = "code";
-        const first = this.findingsIn(this.file)[0];
+        const first = this.leadIn(this.file);
         this.el.querySelectorAll("[data-file]").forEach((b) => b.setAttribute("aria-current", String(b.dataset.file === this.file)));
         if (first) this.activate(first._id, { openIt: this.explained() });
         else this.renderSheet();
@@ -505,4 +522,17 @@ class Report {
     if (e.key === "j") { e.preventDefault(); this.step(1); }
     if (e.key === "k") { e.preventDefault(); this.step(-1); }
   }
+}
+
+// The folder every file shares ("fintech-platform/"), so the file list can
+// show what differs. Empty for a single file or files at different roots.
+function commonFolder(files) {
+  if (files.length < 2) return "";
+  const split = files.map((f) => f.split("/").slice(0, -1));
+  const shared = [];
+  for (let i = 0; i < split[0].length; i++) {
+    if (split.every((parts) => parts[i] === split[0][i])) shared.push(split[0][i]);
+    else break;
+  }
+  return shared.length ? `${shared.join("/")}/` : "";
 }

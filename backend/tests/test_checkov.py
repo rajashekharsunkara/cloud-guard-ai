@@ -218,6 +218,31 @@ class TestHelmPaths:
         )
 
 
+class TestLineRanges:
+
+    def test_ranges_past_the_end_of_the_file_are_clamped(self):
+        raw = json.dumps(
+            {
+                "check_type": "openapi",
+                "results": {
+                    "passed_checks": [],
+                    "failed_checks": [
+                        {
+                            "check_id": "CKV_OPENAPI_4",
+                            "check_name": "Ensure global security",
+                            "file_path": "/api/swagger.yaml",
+                            "file_line_range": [1, 486],
+                            "resource": "security",
+                        }
+                    ],
+                },
+            }
+        )
+        report = parse_report(raw, {"api/swagger.yaml": "a: 1\nb: 2\nc: 3\n"})
+        finding = report.findings[0]
+        assert (finding["line_start"], finding["line_end"]) == (1, 3)
+
+
 class TestPinToTemplate:
 
     TEMPLATE = """apiVersion: v1

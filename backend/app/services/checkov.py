@@ -176,9 +176,19 @@ def _to_finding(
         "line_end": line_range[-1],
         "guideline": check.get("guideline") or "",
     }
-    if framework == "helm" and sources and file_path in sources:
-        _pin_to_template(finding, check["resource"], sources[file_path])
+    if sources and file_path in sources:
+        if framework == "helm":
+            _pin_to_template(finding, check["resource"], sources[file_path])
+        _clamp_lines(finding, sources[file_path])
     return finding
+
+
+def _clamp_lines(finding: dict, content: str) -> None:
+    # Some frameworks (OpenAPI, for one) report ranges past the end of the file.
+    last = max(len(content.splitlines()), 1)
+    start = min(max(int(finding["line_start"] or 0), 0), last)
+    end = min(max(int(finding["line_end"] or 0), start), last)
+    finding["line_start"], finding["line_end"] = start, end
 
 
 def _chart_dirs(sources: dict[str, str]) -> set[str]:

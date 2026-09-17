@@ -16,6 +16,6 @@ Files:
 Analyzer findings:
 {findings}
 
-Respond with a JSON object in exactly this form, where "file" is one of the file paths above:
+Respond with a JSON object in exactly this form, where "file" is one of the file paths above and "resource" is the name exactly as written in that file (a Terraform address like aws_s3_bucket.logs, a Compose service name, or a Kubernetes metadata.name):
 {{"explanations": [{{"ref": 1, "description": "...", "remediation": "..."}}],
  "additional": [{{"severity": "CRITICAL|HIGH|MEDIUM|LOW", "title": "...", "description": "...", "resource": "...", "file": "...", "remediation": "..."}}]}}
