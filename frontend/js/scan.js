@@ -1,7 +1,7 @@
 import { applyAnalysis, llmHeaders } from "./model.js";
 import { renderReport } from "./report.js";
 import {
-  $, API, apiError, plural, setBusy, store, toast,
+  $, API, apiError, escapeHtml, plural, setBusy, store, toast,
 } from "./util.js";
 
 const EXAMPLE = `resource "aws_s3_bucket" "data_lake" {
@@ -64,7 +64,9 @@ const STEP_LABELS = {
 let activeSource = "paste";
 let zipFile = null;
 let scanning = false;
-let lastRequest = null;
+// The most recent scan from this page, so its result page can offer to run
+// it again. Results opened any other way are loaded from history.
+let lastScan = null;
 
 /* Editor */
 
@@ -250,12 +252,11 @@ export async function runScan(request = null) {
   if (scanning) return;
   const req = request || buildRequest();
   if (!req) return;
-  lastRequest = req;
+  if (location.hash.startsWith("#scan/")) location.hash = "#scan";
 
   scanning = true;
   const btn = $("btn-scan");
   setBusy(btn, true, "Scanning");
-  $("scan-report").hidden = true;
   log.reset();
 
   const context = { result: null };
@@ -275,12 +276,10 @@ export async function runScan(request = null) {
 
     document.dispatchEvent(new CustomEvent("cloudguard:scanned"));
     applyAnalysis(context.result.analysis);
-    const report = $("scan-report");
-    renderReport(report, { ...context.result, original_code: req.original }, {
-      onRetry: () => runScan(lastRequest),
-    });
-    report.hidden = false;
-    report.scrollIntoView({ behavior: "smooth", block: "start" });
+    const id = context.result.audit_id;
+    lastScan = { id, result: { ...context.result, original_code: req.original }, request: req };
+    if (!$("view-scan").hidden) location.hash = `#scan/${encodeURIComponent(id)}`;
+    else toast("Your scan finished. It's saved in History.");
   } catch (err) {
     log.failRunning("stopped");
     toast(err.message, "error");
@@ -290,12 +289,50 @@ export async function runScan(request = null) {
   }
 }
 
+/* Result page */
+
+export function showScanForm() {
+  $("scan-result").hidden = true;
+  $("scan-form").hidden = false;
+}
+
+export async function showScanResult(id) {
+  $("scan-form").hidden = true;
+  $("scan-result").hidden = false;
+  const container = $("scan-report");
+  const fresh = lastScan && lastScan.id === id;
+  $("btn-rescan").hidden = !fresh;
+  if (fresh) {
+    renderReport(container, lastScan.result, { onRetry: scanAgain });
+    return;
+  }
+  // Opened from a reload or a link: the scan is in this browser's history.
+  container.innerHTML = `<div class="loading-row"><span class="spinner"></span>Loading scan</div>`;
+  try {
+    const res = await fetch(`${API}/history/${encodeURIComponent(id)}`);
+    if (res.status === 404) {
+      container.innerHTML = `<div class="empty-state"><h3>Scan not found</h3><p>It may have been cleared, or it was made in another browser.</p></div>`;
+      return;
+    }
+    if (!res.ok) throw await apiError(res, "The scan couldn't be loaded.");
+    if (location.hash !== `#scan/${encodeURIComponent(id)}`) return;
+    renderReport(container, await res.json());
+  } catch (err) {
+    container.innerHTML = `<div class="empty-state"><h3>Scan unavailable</h3><p>${escapeHtml(err.message)}</p></div>`;
+  }
+}
+
+function scanAgain() {
+  if (lastScan) runScan(lastScan.request);
+}
+
 export function initScan() {
   initEditor();
   initSources();
   $("btn-scan").addEventListener("click", () => runScan());
+  $("btn-rescan").addEventListener("click", scanAgain);
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !$("view-scan").hidden) {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !$("view-scan").hidden && !$("scan-form").hidden) {
       e.preventDefault();
       runScan();
     }

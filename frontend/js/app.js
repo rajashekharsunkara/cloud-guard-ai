@@ -1,7 +1,7 @@
 import { initDiagram } from "./diagram.js";
 import { initHistory, showDetail, showIndex } from "./history.js";
 import { initModel } from "./model.js";
-import { initScan } from "./scan.js";
+import { initScan, showScanForm, showScanResult } from "./scan.js";
 import { $, API, store } from "./util.js";
 
 /* Theme */
@@ -51,6 +51,14 @@ function route() {
   });
   const title = $(`view-${view}`).dataset.title;
   document.title = view === "scan" ? "CloudGuard" : `${title} · CloudGuard`;
+  if (view === "scan") {
+    if (param) {
+      document.title = "Scan result · CloudGuard";
+      showScanResult(decodeURIComponent(param));
+    } else {
+      showScanForm();
+    }
+  }
   if (view === "history") {
     if (param) showDetail(param);
     else showIndex();

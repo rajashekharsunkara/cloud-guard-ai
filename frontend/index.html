@@ -70,81 +70,91 @@
   <main class="wrap">
 
     <section class="view" id="view-scan" data-title="Scan">
-      <div class="page-head">
-        <span class="eyebrow">Infrastructure code review</span>
-        <h1>Scan infrastructure code for security problems</h1>
-        <p class="lede">Paste a Terraform, CloudFormation, Kubernetes or Compose file, upload a zip, or link a public GitHub repository. Checkov runs over a thousand policies against it, and an explained scan pins each problem to the line it comes from and writes the fix.</p>
-      </div>
-
-      <div class="desk">
-        <div class="intake">
-          <div class="source-tabs" role="tablist" aria-label="What to scan">
-            <button class="source-tab" role="tab" type="button" data-source="paste" aria-selected="true"><svg class="icon"><use href="#i-paste"/></svg>Paste a file</button>
-            <button class="source-tab" role="tab" type="button" data-source="zip" aria-selected="false"><svg class="icon"><use href="#i-zip"/></svg>Upload a zip</button>
-            <button class="source-tab" role="tab" type="button" data-source="github" aria-selected="false"><svg class="icon"><use href="#i-repo"/></svg>GitHub repository</button>
-          </div>
-
-          <div data-panel-source="paste">
-            <div class="editor-bar">
-              <label class="sr-only" for="file-name">File name</label>
-              <input class="filename" id="file-name" type="text" value="main.tf" maxlength="255" spellcheck="false" autocomplete="off">
-              <span class="editor-meta" id="editor-meta"></span>
-              <span class="spacer"></span>
-              <button class="link-btn" id="btn-example" type="button">Load an example</button>
-              <button class="link-btn" id="btn-clear" type="button">Clear</button>
-            </div>
-            <div class="editor-body">
-              <pre class="gutter" id="gutter" aria-hidden="true">1</pre>
-              <label class="sr-only" for="iac-input">Configuration</label>
-              <textarea id="iac-input" wrap="off" spellcheck="false" autocapitalize="off" autocomplete="off"
-                placeholder="resource &quot;aws_s3_bucket&quot; &quot;logs&quot; {&#10;  bucket = &quot;acme-app-logs&quot;&#10;}"></textarea>
-            </div>
-          </div>
-
-          <div class="source-panel" data-panel-source="zip" hidden>
-            <label class="dropzone" id="zip-dropzone" for="zip-file">
-              <input type="file" id="zip-file" accept=".zip,application/zip">
-              <span class="dropzone-empty">
-                <svg class="icon"><use href="#i-upload"/></svg>
-                <span class="dropzone-title" id="zip-title">Choose a zip or drop it here</span>
-                <span class="dropzone-sub" id="zip-sub">Terraform, CloudFormation, Kubernetes, Helm charts, Compose and Dockerfiles inside it are scanned; everything else is ignored. Up to 10 MB.</span>
-              </span>
-            </label>
-          </div>
-
-          <div class="source-panel repo-panel" data-panel-source="github" hidden>
-            <label class="field-label" for="repo-url">Public repository or folder</label>
-            <input class="text-field" id="repo-url" type="url" spellcheck="false" autocomplete="off" placeholder="https://github.com/owner/repo/tree/main/infra">
-            <p class="field-help">Link to a folder to scan part of a repository. Private repositories and branch names containing a slash aren't supported.</p>
-            <p class="field-help">Try <button class="link-btn inline" type="button" data-repo="https://github.com/bridgecrewio/terragoat/tree/master/terraform/aws">terragoat</button>, a Terraform project that's vulnerable on purpose.</p>
-          </div>
-
-          <div class="scan-bar">
-            <span class="scan-hint" id="scan-hint"><kbd>Ctrl</kbd> <kbd>Enter</kbd> to scan</span>
-            <button class="btn btn-primary" id="btn-scan" type="button">Scan</button>
-          </div>
+      <div id="scan-form">
+        <div class="page-head">
+          <span class="eyebrow">Infrastructure code review</span>
+          <h1>Scan infrastructure code for security problems</h1>
+          <p class="lede">Paste a Terraform, CloudFormation, Kubernetes or Compose file, upload a zip, or link a public GitHub repository. Checkov runs over a thousand policies against it, and an explained scan pins each problem to the line it comes from and writes the fix.</p>
         </div>
 
-        <aside class="desk-side">
-          <div class="side-block" id="side-idle">
-            <span class="eyebrow">What a scan does</span>
-            <ol class="steps-list">
-              <li><strong>Checkov</strong> checks every resource against its policies. The score comes only from these results, so it's the same every time.</li>
-              <li>An <strong>explained scan</strong> says what each finding puts at risk in your code, and flags problems no policy covers.</li>
-              <li>It writes a <strong>patched file</strong> you can compare line by line before using it.</li>
-            </ol>
+        <div class="desk">
+          <div class="intake">
+            <div class="source-tabs" role="tablist" aria-label="What to scan">
+              <button class="source-tab" role="tab" type="button" data-source="paste" aria-selected="true"><svg class="icon"><use href="#i-paste"/></svg>Paste a file</button>
+              <button class="source-tab" role="tab" type="button" data-source="zip" aria-selected="false"><svg class="icon"><use href="#i-zip"/></svg>Upload a zip</button>
+              <button class="source-tab" role="tab" type="button" data-source="github" aria-selected="false"><svg class="icon"><use href="#i-repo"/></svg>GitHub repository</button>
+            </div>
+
+            <div data-panel-source="paste">
+              <div class="editor-bar">
+                <label class="sr-only" for="file-name">File name</label>
+                <input class="filename" id="file-name" type="text" value="main.tf" maxlength="255" spellcheck="false" autocomplete="off">
+                <span class="editor-meta" id="editor-meta"></span>
+                <span class="spacer"></span>
+                <button class="link-btn" id="btn-example" type="button">Load an example</button>
+                <button class="link-btn" id="btn-clear" type="button">Clear</button>
+              </div>
+              <div class="editor-body">
+                <pre class="gutter" id="gutter" aria-hidden="true">1</pre>
+                <label class="sr-only" for="iac-input">Configuration</label>
+                <textarea id="iac-input" wrap="off" spellcheck="false" autocapitalize="off" autocomplete="off"
+                  placeholder="resource &quot;aws_s3_bucket&quot; &quot;logs&quot; {&#10;  bucket = &quot;acme-app-logs&quot;&#10;}"></textarea>
+              </div>
+            </div>
+
+            <div class="source-panel" data-panel-source="zip" hidden>
+              <label class="dropzone" id="zip-dropzone" for="zip-file">
+                <input type="file" id="zip-file" accept=".zip,application/zip">
+                <span class="dropzone-empty">
+                  <svg class="icon"><use href="#i-upload"/></svg>
+                  <span class="dropzone-title" id="zip-title">Choose a zip or drop it here</span>
+                  <span class="dropzone-sub" id="zip-sub">Terraform, CloudFormation, Kubernetes, Helm charts, Compose and Dockerfiles inside it are scanned; everything else is ignored. Up to 10 MB.</span>
+                </span>
+              </label>
+            </div>
+
+            <div class="source-panel repo-panel" data-panel-source="github" hidden>
+              <label class="field-label" for="repo-url">Public repository or folder</label>
+              <input class="text-field" id="repo-url" type="url" spellcheck="false" autocomplete="off" placeholder="https://github.com/owner/repo/tree/main/infra">
+              <p class="field-help">Link to a folder to scan part of a repository. Private repositories and branch names containing a slash aren't supported.</p>
+              <p class="field-help">Try <button class="link-btn inline" type="button" data-repo="https://github.com/bridgecrewio/terragoat/tree/master/terraform/aws">terragoat</button>, a Terraform project that's vulnerable on purpose.</p>
+            </div>
+
+            <div class="scan-bar">
+              <span class="scan-hint" id="scan-hint"><kbd>Ctrl</kbd> <kbd>Enter</kbd> to scan</span>
+              <button class="btn btn-primary" id="btn-scan" type="button">Scan</button>
+            </div>
           </div>
 
-          <div class="tier-box" id="tier-box" hidden></div>
+          <aside class="desk-side">
+            <div class="side-block" id="side-idle">
+              <span class="eyebrow">What a scan does</span>
+              <ol class="steps-list">
+                <li><strong>Checkov</strong> checks every resource against its policies. The score comes only from these results, so it's the same every time.</li>
+                <li>An <strong>explained scan</strong> says what each finding puts at risk in your code, and flags problems no policy covers.</li>
+                <li>It writes a <strong>patched file</strong> you can compare line by line before using it.</li>
+              </ol>
+            </div>
 
-          <div class="side-block" id="side-progress" hidden>
-            <span class="eyebrow">Scan log</span>
-            <ol class="log" id="log" aria-live="polite"></ol>
-          </div>
-        </aside>
+            <div class="tier-box" id="tier-box" hidden></div>
+
+            <div class="side-block" id="side-progress" hidden>
+              <span class="eyebrow">Scan log</span>
+              <ol class="log" id="log" aria-live="polite"></ol>
+            </div>
+          </aside>
+        </div>
+
       </div>
 
-      <section class="report" id="scan-report" hidden></section>
+      <div id="scan-result" hidden>
+        <div class="result-bar">
+          <a class="back" href="#scan"><svg class="icon"><use href="#i-back"/></svg>New scan</a>
+          <span class="spacer"></span>
+          <button class="btn btn-quiet btn-sm" id="btn-rescan" type="button" hidden><svg class="icon"><use href="#i-refresh"/></svg><span>Scan again</span></button>
+        </div>
+        <section class="report" id="scan-report"></section>
+      </div>
     </section>
 
     <section class="view" id="view-diagram" data-title="Diagram check" hidden>

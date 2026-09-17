@@ -489,6 +489,8 @@ main.wrap { padding-top: 40px; padding-bottom: 96px; min-height: calc(100vh - va
 .back:hover { color: var(--ink); }
 .back .icon { width: 16px; height: 16px; }
 #history-detail .report { margin-top: 20px; }
+.result-bar { display: flex; align-items: center; gap: 12px; }
+#scan-result .report { margin-top: 20px; }
 .loading-row { display: flex; align-items: center; gap: 10px; padding: 32px 12px; color: var(--ink-3); }
 .empty-state { padding: 48px 12px; color: var(--ink-2); }
 .empty-state h3 { font-size: 16px; color: var(--ink); margin-bottom: 6px; }

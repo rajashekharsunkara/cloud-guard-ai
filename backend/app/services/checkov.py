@@ -159,7 +159,8 @@ def _to_finding(
     check: dict, file_path: str, framework: str = "", sources: dict | None = None
 ) -> dict:
     line_range = check.get("file_line_range") or [0, 0]
-    resource = check["resource"]
+    # Dockerfile resources come as "/Dockerfile.FROM"; paths elsewhere are relative.
+    resource = check["resource"].lstrip("/")
     if check["check_id"].startswith("CKV_SECRET"):
         # Secret findings use a hash of the secret as the resource name.
         resource = ""
