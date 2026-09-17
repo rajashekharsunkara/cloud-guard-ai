@@ -70,6 +70,7 @@ class TestLoadZip:
                 "infra/main.tf": 'resource "x" "y" {}',
                 "infra/README.md": "docs",
                 "app/Dockerfile": "FROM python:3.12",
+                "chart/templates/_helpers.tpl": '{{- define "x" -}}{{- end -}}',
                 "infra/": "",
             }
         )
@@ -78,6 +79,7 @@ class TestLoadZip:
         assert source.files == {
             "infra/main.tf": 'resource "x" "y" {}',
             "app/Dockerfile": "FROM python:3.12",
+            "chart/templates/_helpers.tpl": '{{- define "x" -}}{{- end -}}',
         }
 
     def test_traversal_names_stay_inside(self):

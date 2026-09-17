@@ -3,6 +3,7 @@
 pydantic==2.13.4
 pydantic-settings==2.14.2
 python-dotenv==1.2.2
+PyYAML==6.0.3
 httpx==0.28.1
 anthropic==1.6.0
 openai==3.14.1

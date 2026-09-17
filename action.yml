@@ -1,6 +1,6 @@
 name: CloudGuard infrastructure scan
 description: >
-  Run Checkov on Terraform, CloudFormation, Kubernetes, Compose and Dockerfiles,
+  Run Checkov on Terraform, CloudFormation, Kubernetes, Helm, Compose and Dockerfiles,
   optionally explain the findings with your own model API key, and report on the
   pull request.
 branding:

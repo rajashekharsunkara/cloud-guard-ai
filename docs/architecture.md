@@ -76,7 +76,7 @@ sequenceDiagram
 ```
 
 1. **Collect files.** Pasted text becomes a single file. Zips and repository tarballs are read in memory with limits on size, file count and archive entries; only configuration file types are kept. See [Security](security.md#uploads-and-repositories).
-2. **Run Checkov.** Files are written to a temporary directory and Checkov runs as a subprocess with a clean environment and a timeout. Passed checks tell the pipeline which files Checkov actually understood; generic secret scanning doesn't count as coverage.
+2. **Run Checkov.** Files are written to a temporary directory and Checkov runs as a subprocess with a clean environment and a timeout. Passed checks tell the pipeline which files Checkov actually understood; generic secret scanning doesn't count as coverage. Helm charts are rendered first, with any dependencies that would be downloaded removed, and each finding is pinned to the resource in the template it came from.
 3. **Rate and score.** Each finding gets a severity from `severity.py`. The score uses only Checkov findings in covered files.
 4. **Decide whether a model is available.** In order: the user's own key, otherwise the server's free tier if it isn't rate limited and the user has free scans left. If none apply, the scan continues with Checkov results and records a `limit` explaining why.
 5. **Review.** The files with the most serious findings, up to a size budget, and a numbered list of findings go to the model, which returns explanations by reference number plus additional findings. Anthropic models get a JSON schema; other providers get JSON mode.
@@ -142,7 +142,7 @@ Findings are embedded with bge-small-en-v1.5 running in the app through ONNX Run
 
 ### Checkov in its own virtualenv
 
-Checkov has a large dependency tree that would otherwise have to agree with the app's pins. The image installs it into `/opt/checkov` from a fully pinned requirements file and calls the binary, which also isolates it from the app's environment variables.
+Checkov has a large dependency tree that would otherwise have to agree with the app's pins. The image installs it into `/opt/checkov` from a fully pinned requirements file and calls the binary, which also isolates it from the app's environment variables. The `helm` binary it uses for charts is a pinned release checked against its SHA-256.
 
 ## Performance notes
 

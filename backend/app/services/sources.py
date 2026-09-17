@@ -38,6 +38,8 @@ SCANNED_SUFFIXES = (
     ".template",
     ".bicep",
     ".dockerfile",
+    # Helm helpers; charts that include them don't render without them.
+    ".tpl",
 )
 SKIPPED_DIRS = {".git", ".terraform", "node_modules", "vendor", ".venv", "venv"}
 # JSON and YAML that is never infrastructure code but often large.

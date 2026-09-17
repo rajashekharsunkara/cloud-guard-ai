@@ -108,7 +108,7 @@ python -m venv .checkov && .checkov/bin/pip install -r requirements-checkov.txt
 export CHECKOV_BIN="$PWD/.checkov/bin/checkov"
 ```
 
-`requirements-cli.txt` is a subset of the server's dependencies: the model SDKs and nothing for the database, S3 or embeddings. Checkov lives in its own virtual environment because its dependency pins conflict with the app's.
+`requirements-cli.txt` is a subset of the server's dependencies: the model SDKs and nothing for the database, S3 or embeddings. Checkov lives in its own virtual environment because its dependency pins conflict with the app's. Helm charts are only rendered when `helm` is on `PATH`; GitHub-hosted runners include it.
 
 ### Scan
 

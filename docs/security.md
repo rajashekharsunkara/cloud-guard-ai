@@ -36,6 +36,7 @@ Code in `backend/app/services/checkov.py`.
 - It runs with `--skip-download` (no fetching of external modules or policies), in a fresh temporary directory that's removed afterwards, under a timeout (90 seconds by default) after which the process is killed.
 - Checkov is installed from a fully pinned requirements file into its own virtual environment. The container runs as an unprivileged user.
 - Checkov parses Terraform and templates but doesn't execute them. Terraform providers, `external` data sources and provisioners are never run.
+- **Helm charts.** Checkov renders charts with `helm template --dependency-update`, which would download each dependency from the repository named in `Chart.yaml`, so an uploaded chart could otherwise make the server request any URL, including internal addresses. Before the scan, dependencies in `Chart.yaml` and `requirements.yaml` are reduced to subcharts shipped inside the upload (no repository, or a relative `file://` path); `http`, `https`, `oci` and named repositories are removed, and a chart file that can't be parsed is left out entirely. Checkov's own `CHECKOV_HELM_ALLOWED_REMOTE_REPOS` guard is also set to block remote repositories. A test runs a real chart with dependencies pointing at a local listener and asserts that no connection is made. `helm` is a pinned release verified against its published checksum.
 - For secrets that Checkov detects, the hash it uses as a resource name is dropped, so the report points at the line without carrying anything derived from the secret.
 
 ## Model API keys

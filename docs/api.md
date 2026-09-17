@@ -141,11 +141,13 @@ curl -N -s https://cloud-guard-ai.duckdns.org/api/audit/stream \
 
 `multipart/form-data` with the zip in the `archive` field. Streams the same events.
 
-Limits: 10 MB compressed, 20 MB of configuration files after extraction, 1 MB per file (larger files are skipped), 400 configuration files and 20,000 archive entries. Only these file types are kept: `.tf`, `.tf.json`, `.tfvars`, `.hcl`, `.yaml`, `.yml`, `.json`, `.template`, `.bicep`, `.dockerfile` and files named `Dockerfile*`. The directories `.git`, `.terraform`, `node_modules`, `vendor`, `.venv` and `venv` are ignored, as are package manifests and lock files such as `package.json` and `.terraform.lock.hcl`.
+Limits: 10 MB compressed, 20 MB of configuration files after extraction, 1 MB per file (larger files are skipped), 400 configuration files and 20,000 archive entries. Only these file types are kept: `.tf`, `.tf.json`, `.tfvars`, `.hcl`, `.yaml`, `.yml`, `.json`, `.template`, `.bicep`, `.dockerfile`, `.tpl` (Helm helpers) and files named `Dockerfile*`. The directories `.git`, `.terraform`, `node_modules`, `vendor`, `.venv` and `venv` are ignored, as are package manifests and lock files such as `package.json` and `.terraform.lock.hcl`.
 
 ```bash
 curl -N -s https://cloud-guard-ai.duckdns.org/api/audit/archive -F archive=@infra.zip
 ```
+
+Helm charts are rendered with `helm template` and findings point at the template that produced each resource. Chart dependencies that would be downloaded from a repository are removed first; see [Security](security.md#the-scanner).
 
 An archive that isn't a valid zip, is encrypted, or has no configuration files returns `400` before streaming starts.
 

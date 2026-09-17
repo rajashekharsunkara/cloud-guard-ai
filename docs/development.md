@@ -89,7 +89,7 @@ The test configuration rewrites the `postgres` and `localstack` hostnames from `
 
 | File | Covers |
 |------|--------|
-| `test_checkov.py` | Parsing real Checkov output, coverage rules, path safety, and a run of the real binary when `CHECKOV_BIN` is set (skipped otherwise) |
+| `test_checkov.py` | Parsing real Checkov output, coverage rules, path safety, Helm dependency stripping and template line mapping, and runs of the real binary when `CHECKOV_BIN` is set (skipped otherwise), including a chart rendered by `helm` that must not contact its dependency repositories |
 | `test_severity.py` | Explicit and keyword ratings, score curve, determinism |
 | `test_sources.py` | Zip and tarball limits, traversal and symlink handling, GitHub URL parsing, directory loading |
 | `test_llm.py` | Key and model validation, fixed base URLs, error classification and retry times, request shapes for each SDK (JSON mode, schemas, images, fallbacks), model listing and defaults |
